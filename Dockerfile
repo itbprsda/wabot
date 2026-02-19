@@ -27,6 +27,7 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 WORKDIR /app
 
 COPY package.json .
+COPY fix-remoteauth.js .
 RUN npm install
 
 COPY . .
