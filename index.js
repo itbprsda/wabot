@@ -69,8 +69,8 @@ const puppeteerConfig = IS_PROD
             '--mute-audio',
             '--safebrowsing-disable-auto-update',
         ],
-        timeout: 120000, // 2 min — HF cold starts can be slow
-        protocolTimeout: 120000,
+        timeout: 120000,
+        protocolTimeout: 300000, // 5 min — needed for sendMessage on slow containers
     }
     : {
         headless: false,
@@ -110,6 +110,17 @@ function normalizePhone(phone) {
     let cleaned = String(phone).replace(/\D/g, '');
     if (cleaned.startsWith('0')) cleaned = '62' + cleaned.slice(1);
     return `${cleaned}@c.us`;
+}
+
+// ─── Send with timeout helper ─────────────────────────────────────────────────
+// Wraps any promise with a timeout so API calls fail fast instead of hanging
+function withTimeout(promise, ms = 30000, label = 'Operation') {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)
+        ),
+    ]);
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
@@ -352,7 +363,7 @@ app.post('/api/send/text', requireApiKey, requireReady, async (req, res) => {
     }
     try {
         const chatId = normalizePhone(to);
-        const sent   = await waClient.sendMessage(chatId, message);
+        const sent   = await withTimeout(waClient.sendMessage(chatId, message), 30000, 'sendMessage');
         console.log(`📤 Text → ${chatId}`);
         res.json({ success: true, messageId: sent.id._serialized, to: chatId });
     } catch (err) {
@@ -372,7 +383,7 @@ app.post('/api/send/image', requireApiKey, requireReady, async (req, res) => {
         const media  = url
             ? await MessageMedia.fromUrl(url, { unsafeMime: true })
             : new MessageMedia(mime || 'image/jpeg', base64, filename || 'image.jpg');
-        const sent = await waClient.sendMessage(chatId, media, { caption: caption || '' });
+        const sent = await withTimeout(waClient.sendMessage(chatId, media, { caption: caption || '' }), 30000, 'sendImage');
         console.log(`📤 Image → ${chatId}`);
         res.json({ success: true, messageId: sent.id._serialized, to: chatId });
     } catch (err) {
@@ -392,10 +403,10 @@ app.post('/api/send/file', requireApiKey, requireReady, async (req, res) => {
         const media  = url
             ? await MessageMedia.fromUrl(url, { unsafeMime: true })
             : new MessageMedia(mime || 'application/octet-stream', base64, filename || 'file');
-        const sent = await waClient.sendMessage(chatId, media, {
+        const sent = await withTimeout(waClient.sendMessage(chatId, media, {
             sendMediaAsDocument: true,
             caption: caption || '',
-        });
+        }), 30000, 'sendFile');
         console.log(`📤 File → ${chatId}`);
         res.json({ success: true, messageId: sent.id._serialized, to: chatId });
     } catch (err) {
@@ -415,7 +426,7 @@ app.post('/api/send/audio', requireApiKey, requireReady, async (req, res) => {
         const media  = url
             ? await MessageMedia.fromUrl(url, { unsafeMime: true })
             : new MessageMedia('audio/ogg; codecs=opus', base64, 'audio.ogg');
-        const sent = await waClient.sendMessage(chatId, media, { sendAudioAsVoice: ptt !== false });
+        const sent = await withTimeout(waClient.sendMessage(chatId, media, { sendAudioAsVoice: ptt !== false }), 30000, 'sendAudio');
         console.log(`📤 Audio → ${chatId}`);
         res.json({ success: true, messageId: sent.id._serialized, to: chatId });
     } catch (err) {
@@ -433,7 +444,7 @@ app.post('/api/send/location', requireApiKey, requireReady, async (req, res) => 
     try {
         const chatId = normalizePhone(to);
         const loc    = new Location(parseFloat(latitude), parseFloat(longitude), description || '');
-        const sent   = await waClient.sendMessage(chatId, loc);
+        const sent   = await withTimeout(waClient.sendMessage(chatId, loc), 30000, 'sendLocation');
         console.log(`📤 Location → ${chatId}`);
         res.json({ success: true, messageId: sent.id._serialized, to: chatId });
     } catch (err) {
