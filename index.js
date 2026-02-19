@@ -3,7 +3,6 @@
 require('dotenv').config();
 
 const { Client, RemoteAuth, MessageMedia, Location } = require('whatsapp-web.js');
-const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
 const qrcode   = require('qrcode-terminal');
 const express  = require('express');
@@ -13,49 +12,65 @@ const https    = require('https');
 const http     = require('http');
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const MONGODB_URI     = process.env.MONGODB_URI;
-const SESSION_NAME    = process.env.SESSION_NAME    || 'whatsapp-bot';
-const PORT            = parseInt(process.env.PORT   || '7860', 10);
-const API_KEY         = process.env.API_KEY         || 'changeme';
-const WEBHOOK_URL     = process.env.WEBHOOK_URL     || '';
-const WEBHOOK_SECRET  = process.env.WEBHOOK_SECRET  || '';
-// IS_PROD: true when running on Hugging Face (or any Linux with Puppeteer path set explicitly).
-// On local Windows/Mac dev, PUPPETEER_EXECUTABLE_PATH is typically not set — Puppeteer uses its own bundled Chromium.
-const IS_PROD         = !!process.env.PUPPETEER_EXECUTABLE_PATH;
+const MONGODB_URI    = process.env.MONGODB_URI;
+const SESSION_NAME   = process.env.SESSION_NAME   || 'whatsapp-bot';
+const PORT           = parseInt(process.env.PORT  || '7860', 10);
+const API_KEY        = process.env.API_KEY        || 'changeme';
+const WEBHOOK_URL    = process.env.WEBHOOK_URL    || '';
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
 
-// Media size guard — skip base64 encoding in webhook payload if media exceeds this
+// IS_PROD: true when PUPPETEER_EXECUTABLE_PATH is set (always set inside Docker via ENV in Dockerfile)
+// On local Windows/Mac dev it's not set → Puppeteer uses its own bundled Chromium
+const IS_PROD = !!process.env.PUPPETEER_EXECUTABLE_PATH;
+
+// Media size guard — skip base64 in webhook payload if media exceeds this
 const MAX_MEDIA_WEBHOOK_BYTES = 5 * 1024 * 1024; // 5 MB
-
-const BACKUP_INTERVAL  = IS_PROD ? 5 * 60 * 1000 : 60 * 1000;
-const DATA_PATH        = path.resolve('./.wwebjs_auth');
-const SESSION_DIR_NAME = `RemoteAuth-${SESSION_NAME}`;
+const MAX_WEBHOOK_ATTEMPTS    = 3;
+const BACKUP_INTERVAL         = IS_PROD ? 5 * 60 * 1000 : 60 * 1000;
+const DATA_PATH               = path.resolve('./.wwebjs_auth');
+const SESSION_DIR_NAME        = `RemoteAuth-${SESSION_NAME}`;
 
 // ─── Startup validation ───────────────────────────────────────────────────────
 if (!MONGODB_URI) {
-    console.error('❌ MONGODB_URI is not set! Add it to your .env file.');
+    console.error('❌ MONGODB_URI is not set! Add it to your .env or HF Secrets.');
     process.exit(1);
 }
 if (API_KEY === 'changeme') {
-    console.warn('⚠️  API_KEY is using the default value — set a strong key in .env!');
+    console.warn('⚠️  API_KEY is using the default value — set a strong key!');
 }
 
-console.log(`🌍 Environment  : ${IS_PROD ? 'Production (Hugging Face)' : 'Development (Local)'}`);
+console.log(`🌍 Environment  : ${IS_PROD ? 'Production (Docker/HF)' : 'Development (Local)'}`);
 console.log(`📛 Session name : ${SESSION_NAME}`);
 console.log(`⏱️  Backup every : ${BACKUP_INTERVAL / 1000}s`);
-console.log(`🔑 API Key      : ${API_KEY === 'changeme' ? '⚠️  DEFAULT — change this!' : '✅ Set'}`);
-console.log(`🪝 Webhook URL  : ${WEBHOOK_URL || '❌ Not set — incoming messages will not be forwarded'}`);
+console.log(`🔑 API Key      : ${API_KEY === 'changeme' ? '⚠️  DEFAULT' : '✅ Set'}`);
+console.log(`🪝 Webhook URL  : ${WEBHOOK_URL || '❌ Not set'}`);
+console.log(`🌐 Port         : ${PORT}`);
 
 // ─── Puppeteer config ─────────────────────────────────────────────────────────
+// NOTE: --single-process is intentionally REMOVED — it causes hangs in containers
 const puppeteerConfig = IS_PROD
     ? {
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH, // always set when IS_PROD is true
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
         headless: true,
         args: [
-            '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas', '--disable-gpu',
-            '--no-first-run', '--no-zygote', '--single-process', '--disable-extensions',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-extensions',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-sync',
+            '--disable-translate',
+            '--metrics-recording-only',
+            '--mute-audio',
+            '--safebrowsing-disable-auto-update',
         ],
-        timeout: 60000,
+        timeout: 120000, // 2 min — HF cold starts can be slow
+        protocolTimeout: 120000,
     }
     : {
         headless: false,
@@ -87,13 +102,10 @@ function formatTime(d) {
  * Returns: "628123456789@c.us"
  */
 function normalizePhone(phone) {
-    // If already a valid WA ID, return as-is
     if (typeof phone === 'string' && (phone.endsWith('@c.us') || phone.endsWith('@g.us'))) {
         return phone;
     }
-    // Strip all non-digit characters (including leading +)
     let cleaned = String(phone).replace(/\D/g, '');
-    // Convert local Indonesian format to international
     if (cleaned.startsWith('0')) cleaned = '62' + cleaned.slice(1);
     return `${cleaned}@c.us`;
 }
@@ -115,13 +127,6 @@ function requireReady(req, res, next) {
 }
 
 // ─── Webhook ──────────────────────────────────────────────────────────────────
-/**
- * Fire-and-forget webhook POST.
- * Retries up to MAX_WEBHOOK_ATTEMPTS total, with 5s delay between each.
- * After all attempts are exhausted the payload is dropped and logged.
- */
-const MAX_WEBHOOK_ATTEMPTS = 3;
-
 async function fireWebhook(payload, attempt = 1) {
     if (!WEBHOOK_URL) return;
     try {
@@ -143,7 +148,7 @@ async function fireWebhook(payload, attempt = 1) {
         await new Promise((resolve, reject) => {
             const req = (url.protocol === 'https:' ? https : http).request(options, (res) => {
                 console.log(`🪝 Webhook → ${res.statusCode} (attempt ${attempt}/${MAX_WEBHOOK_ATTEMPTS})`);
-                res.resume(); // consume response to free socket
+                res.resume();
                 resolve();
             });
             req.on('error', reject);
@@ -189,7 +194,6 @@ function createFixedStore(mongooseInstance) {
         async sessionExists(options) {
             const sessionName = path.basename(options.session);
             const col = mongooseInstance.connection.db.collection(`whatsapp-${sessionName}.files`);
-            // Use countDocuments with limit:1 for efficiency
             const count = await col.countDocuments(
                 { filename: { $regex: `^${sessionName}\\.zip\\.` } },
                 { limit: 1 }
@@ -217,12 +221,10 @@ function createFixedStore(mongooseInstance) {
                     .on('close', resolve);
             });
 
-            // Prune old slots, keep only MAX_BACKUPS
-            const allDocs = await bucket.find({}).toArray();
-            const slots   = allDocs
+            const allDocs  = await bucket.find({}).toArray();
+            const slots    = allDocs
                 .filter(d => d.filename.startsWith(`${sessionName}.zip.`))
                 .sort((a, b) => a.uploadDate - b.uploadDate);
-
             const toDelete = slots.slice(0, Math.max(0, slots.length - MAX_BACKUPS));
             for (const doc of toDelete) await bucket.delete(doc._id);
 
@@ -238,7 +240,7 @@ function createFixedStore(mongooseInstance) {
             const allDocs = await bucket.find({}).toArray();
             const slots   = allDocs
                 .filter(d => d.filename.startsWith(`${sessionName}.zip.`))
-                .sort((a, b) => b.uploadDate - a.uploadDate); // newest first
+                .sort((a, b) => b.uploadDate - a.uploadDate);
 
             if (slots.length === 0) throw new Error('No backup slots found in MongoDB');
             console.log(`📦 Found ${slots.length} backup slot(s) in MongoDB`);
@@ -286,11 +288,11 @@ app.get('/', (req, res) => {
         qr_ready:      '📋 Check the Logs tab and scan the QR code with WhatsApp.',
         ready:         '🟢 Bot is online and ready to send/receive messages.',
         disconnected:  '🔴 Lost connection — reconnecting automatically...',
-        starting:      '🔵 Starting up, please wait...',
+        starting:      '🔵 Starting up, please wait... (may take 1-2 min on first start)',
         authenticated: '🔐 Authenticated — loading WhatsApp session...',
     };
-    res.send(`<!DOCTYPE html><html><head><title>WhatsApp Bot</title><meta http-equiv="refresh" content="10">
-    <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:sans-serif;background:#f0f2f5;min-height:100vh;display:flex;align-items:center;justify-content:center}.card{background:white;border-radius:16px;padding:40px;max-width:580px;width:100%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.08)}h1{color:#111;font-size:1.4rem;margin-bottom:24px}.si{font-size:3.5rem;margin:16px 0}.badge{padding:8px 20px;border-radius:100px;display:inline-block;font-weight:600;font-size:.85rem;text-transform:uppercase}.ready{background:#dcfce7;color:#166534}.qr_ready{background:#fef9c3;color:#854d0e}.starting,.authenticated{background:#dbeafe;color:#1e40af}.disconnected{background:#fee2e2;color:#991b1b}.hint{margin-top:16px;color:#6b7280;font-size:.9rem;line-height:1.6}.meta{margin-top:24px;padding-top:24px;border-top:1px solid #f0f0f0;display:flex;justify-content:space-around;flex-wrap:wrap;gap:12px}.mi{font-size:.8rem;color:#9ca3af}.mi strong{display:block;color:#374151;font-size:.9rem;margin-bottom:2px}.api{margin-top:24px;padding-top:24px;border-top:1px solid #f0f0f0;text-align:left;font-size:.8rem;color:#6b7280;line-height:2}.api code{background:#f4f4f5;padding:2px 6px;border-radius:4px;font-size:.75rem}</style></head>
+    res.send(`<!DOCTYPE html><html lang="en"><head><title>WhatsApp Bot</title><meta http-equiv="refresh" content="10"><meta charset="UTF-8">
+    <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:sans-serif;background:#f0f2f5;min-height:100vh;display:flex;align-items:center;justify-content:center}.card{background:white;border-radius:16px;padding:40px;max-width:600px;width:100%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.08)}h1{color:#111;font-size:1.4rem;margin-bottom:24px}.si{font-size:3.5rem;margin:16px 0}.badge{padding:8px 20px;border-radius:100px;display:inline-block;font-weight:600;font-size:.85rem;text-transform:uppercase}.ready{background:#dcfce7;color:#166534}.qr_ready{background:#fef9c3;color:#854d0e}.starting,.authenticated{background:#dbeafe;color:#1e40af}.disconnected{background:#fee2e2;color:#991b1b}.hint{margin-top:16px;color:#6b7280;font-size:.9rem;line-height:1.6}.meta{margin-top:24px;padding-top:24px;border-top:1px solid #f0f0f0;display:flex;justify-content:space-around;flex-wrap:wrap;gap:12px}.mi{font-size:.8rem;color:#9ca3af}.mi strong{display:block;color:#374151;font-size:.9rem;margin-bottom:2px}.api{margin-top:24px;padding-top:24px;border-top:1px solid #f0f0f0;text-align:left;font-size:.8rem;color:#6b7280;line-height:2}.api code{background:#f4f4f5;padding:2px 6px;border-radius:4px;font-size:.75rem}</style></head>
     <body><div class="card">
     <h1>🤖 WhatsApp Bot API</h1>
     <div class="si">${emoji}</div>
@@ -305,49 +307,47 @@ app.get('/', (req, res) => {
     </div>
     <div class="api">
       <strong>API Endpoints</strong> — Header: <code>x-api-key: YOUR_KEY</code><br><br>
-      <code>GET  /api/health</code>    — Health check (no auth)<br>
-      <code>GET  /api/status</code>    — Bot status<br>
-      <code>POST /api/send/text</code> — Send text message<br>
-      <code>POST /api/send/image</code>— Send image<br>
-      <code>POST /api/send/file</code> — Send file/document<br>
-      <code>POST /api/send/audio</code>— Send audio / voice note<br>
-      <code>POST /api/send/location</code> — Send location<br>
-      <code>GET  /api/chats</code>     — List chats (paginated)<br>
-      <code>GET  /api/contacts</code>  — List contacts (paginated)<br>
-      <code>GET  /api/groups</code>    — List groups<br>
+      <code>GET  /api/health</code>         — Health check (no auth)<br>
+      <code>GET  /api/status</code>         — Bot status<br>
+      <code>POST /api/send/text</code>      — Send text message<br>
+      <code>POST /api/send/image</code>     — Send image<br>
+      <code>POST /api/send/file</code>      — Send file/document<br>
+      <code>POST /api/send/audio</code>     — Send audio / voice note<br>
+      <code>POST /api/send/location</code>  — Send location pin<br>
+      <code>GET  /api/chats</code>          — List chats (paginated)<br>
+      <code>GET  /api/contacts</code>       — List contacts (paginated)<br>
+      <code>GET  /api/groups</code>         — List groups<br>
     </div>
     </div></body></html>`);
 });
 
-// ─── Health check (no auth — for uptime monitors & Hugging Face) ──────────────
+// ─── Health check — no auth, for HF uptime monitor & load balancer ────────────
 app.get('/api/health', (req, res) => {
     res.json({
         success: true,
-        status: botStatus,
-        uptime: formatUptime((Date.now() - startTime) / 1000),
+        status:  botStatus,
+        uptime:  formatUptime((Date.now() - startTime) / 1000),
     });
 });
 
 // ─── Status ───────────────────────────────────────────────────────────────────
 app.get('/api/status', requireApiKey, (req, res) => {
     res.json({
-        success: true,
-        status: botStatus,
-        session: SESSION_NAME,
-        environment: IS_PROD ? 'production' : 'development',
-        uptime: formatUptime((Date.now() - startTime) / 1000),
-        lastBackup: sessionSavedAt,
+        success:           true,
+        status:            botStatus,
+        session:           SESSION_NAME,
+        environment:       IS_PROD ? 'production' : 'development',
+        uptime:            formatUptime((Date.now() - startTime) / 1000),
+        lastBackup:        sessionSavedAt,
         webhookConfigured: !!WEBHOOK_URL,
     });
 });
 
 // ─── Send text ────────────────────────────────────────────────────────────────
-// POST /api/send/text
-// Body: { to: "628123456789", message: "Hello!" }
 app.post('/api/send/text', requireApiKey, requireReady, async (req, res) => {
     const { to, message } = req.body;
     if (!to || !message) {
-        return res.status(400).json({ success: false, error: 'Missing required fields: to, message' });
+        return res.status(400).json({ success: false, error: 'Missing: to, message' });
     }
     try {
         const chatId = normalizePhone(to);
@@ -361,8 +361,6 @@ app.post('/api/send/text', requireApiKey, requireReady, async (req, res) => {
 });
 
 // ─── Send image ───────────────────────────────────────────────────────────────
-// POST /api/send/image
-// Body: { to, url?, base64?, mime?, filename?, caption? }
 app.post('/api/send/image', requireApiKey, requireReady, async (req, res) => {
     const { to, url, base64, mime, filename, caption } = req.body;
     if (!to || (!url && !base64)) {
@@ -383,8 +381,6 @@ app.post('/api/send/image', requireApiKey, requireReady, async (req, res) => {
 });
 
 // ─── Send file ────────────────────────────────────────────────────────────────
-// POST /api/send/file
-// Body: { to, url?, base64?, mime?, filename?, caption? }
 app.post('/api/send/file', requireApiKey, requireReady, async (req, res) => {
     const { to, url, base64, mime, filename, caption } = req.body;
     if (!to || (!url && !base64)) {
@@ -408,8 +404,6 @@ app.post('/api/send/file', requireApiKey, requireReady, async (req, res) => {
 });
 
 // ─── Send audio ───────────────────────────────────────────────────────────────
-// POST /api/send/audio
-// Body: { to, url?, base64?, ptt? }  ptt=true → voice note
 app.post('/api/send/audio', requireApiKey, requireReady, async (req, res) => {
     const { to, url, base64, ptt } = req.body;
     if (!to || (!url && !base64)) {
@@ -430,8 +424,6 @@ app.post('/api/send/audio', requireApiKey, requireReady, async (req, res) => {
 });
 
 // ─── Send location ────────────────────────────────────────────────────────────
-// POST /api/send/location
-// Body: { to, latitude, longitude, description? }
 app.post('/api/send/location', requireApiKey, requireReady, async (req, res) => {
     const { to, latitude, longitude, description } = req.body;
     if (!to || latitude == null || longitude == null) {
@@ -449,8 +441,7 @@ app.post('/api/send/location', requireApiKey, requireReady, async (req, res) => 
     }
 });
 
-// ─── List chats (paginated) ───────────────────────────────────────────────────
-// GET /api/chats?limit=50&offset=0
+// ─── List chats ───────────────────────────────────────────────────────────────
 app.get('/api/chats', requireApiKey, requireReady, async (req, res) => {
     const limit  = Math.min(parseInt(req.query.limit  || '50',  10), 200);
     const offset = parseInt(req.query.offset || '0', 10);
@@ -458,9 +449,7 @@ app.get('/api/chats', requireApiKey, requireReady, async (req, res) => {
         const chats = await waClient.getChats();
         const page  = chats.slice(offset, offset + limit);
         res.json({
-            success: true,
-            total: chats.length,
-            limit, offset,
+            success: true, total: chats.length, limit, offset,
             chats: page.map(c => ({
                 id:          c.id._serialized,
                 name:        c.name,
@@ -474,8 +463,7 @@ app.get('/api/chats', requireApiKey, requireReady, async (req, res) => {
     }
 });
 
-// ─── List contacts (paginated) ────────────────────────────────────────────────
-// GET /api/contacts?limit=100&offset=0
+// ─── List contacts ────────────────────────────────────────────────────────────
 app.get('/api/contacts', requireApiKey, requireReady, async (req, res) => {
     const limit  = Math.min(parseInt(req.query.limit  || '100', 10), 500);
     const offset = parseInt(req.query.offset || '0', 10);
@@ -483,9 +471,7 @@ app.get('/api/contacts', requireApiKey, requireReady, async (req, res) => {
         const contacts = await waClient.getContacts();
         const page     = contacts.slice(offset, offset + limit);
         res.json({
-            success: true,
-            total: contacts.length,
-            limit, offset,
+            success: true, total: contacts.length, limit, offset,
             contacts: page.map(c => ({
                 id:          c.id._serialized,
                 name:        c.name || c.pushname || '',
@@ -517,20 +503,21 @@ app.get('/api/groups', requireApiKey, requireReady, async (req, res) => {
     }
 });
 
-app.listen(PORT, () => console.log(`🌐 Web server → http://localhost:${PORT}`));
+// Start Express immediately so HF health checks pass while WA is still loading
+app.listen(PORT, '0.0.0.0', () => console.log(`🌐 Web server → http://0.0.0.0:${PORT}`));
 
-// ─── WhatsApp client bootstrap ────────────────────────────────────────────────
+// ─── WhatsApp bootstrap ───────────────────────────────────────────────────────
 async function start() {
     try {
         clearLocalCache();
 
         console.log('📦 Connecting to MongoDB...');
-        await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 10000 });
+        await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 15000 });
         console.log('✅ MongoDB connected');
 
-        const store          = createFixedStore(mongoose);
-        const sessionExists  = await store.sessionExists({ session: SESSION_DIR_NAME });
-        let   validSession   = false;
+        const store         = createFixedStore(mongoose);
+        const sessionExists = await store.sessionExists({ session: SESSION_DIR_NAME });
+        let   validSession  = false;
 
         if (sessionExists) {
             const col   = mongoose.connection.db.collection(`whatsapp-${SESSION_DIR_NAME}.files`);
@@ -541,7 +528,7 @@ async function start() {
             const bestSlot = slots.find(f => f.length >= 1000);
 
             if (!bestSlot) {
-                console.warn(`⚠️  All ${slots.length} slot(s) corrupted — deleting and requesting QR rescan`);
+                console.warn(`⚠️  All ${slots.length} slot(s) corrupted — deleting and rescanning QR`);
                 await store.delete({ session: SESSION_DIR_NAME });
             } else {
                 console.log(`✅ Session found: ${slots.length} slot(s), best: ${(bestSlot.length / 1024).toFixed(1)} KB — restoring...`);
@@ -558,6 +545,8 @@ async function start() {
                 backupSyncIntervalMs: BACKUP_INTERVAL,
             }),
             puppeteer: puppeteerConfig,
+            // Increase internal timeouts for slow HF cold starts
+            authTimeoutMs: 120000,
         });
 
         client.on('loading_screen', (percent, message) => {
@@ -592,13 +581,12 @@ async function start() {
                 console.log('🔄 WhatsApp internal refresh — still ready ✅');
                 return;
             }
-            isReady  = true;
-            waClient = client;
+            isReady   = true;
+            waClient  = client;
             botStatus = 'ready';
             console.log('✅ Bot is ready!');
-            console.log(`🌐 API available at http://localhost:${PORT}/api`);
             if (!validSession) {
-                console.log('⏳ New session — first backup in ~60s. Do NOT stop the bot!');
+                console.log('⏳ New session — first backup in ~60s. Do NOT restart the Space!');
             } else {
                 console.log(`💾 Re-backup every ${BACKUP_INTERVAL / 1000}s`);
             }
@@ -628,7 +616,7 @@ async function start() {
             ]);
 
             const payload = {
-                event: 'message',
+                event:     'message',
                 timestamp: Date.now(),
                 message: {
                     id:          msg.id._serialized,
@@ -652,17 +640,16 @@ async function start() {
                 } : null,
             };
 
-            // Only include media in webhook if it's below the size threshold
             if (msg.hasMedia) {
                 try {
                     const media = await msg.downloadMedia();
                     if (media) {
-                        const approxBytes = Math.ceil(media.data.length * 0.75); // base64 → bytes
+                        const approxBytes = Math.ceil(media.data.length * 0.75);
                         if (approxBytes <= MAX_MEDIA_WEBHOOK_BYTES) {
                             payload.message.media = {
                                 mimetype: media.mimetype,
                                 filename: media.filename || '',
-                                data:     media.data, // base64
+                                data:     media.data,
                             };
                         } else {
                             payload.message.mediaTooLarge = true;
@@ -678,7 +665,6 @@ async function start() {
             console.log(`📩 [${msg.from}] ${msg.type}: ${msg.body || '(media)'}`);
             fireWebhook(payload);
 
-            // ── Built-in commands ──
             if (msg.body === '!ping') await msg.reply('🏓 pong!');
             if (msg.body === '!status') {
                 await msg.reply(
@@ -689,8 +675,7 @@ async function start() {
             }
         });
 
-        // ─── Reactions → webhook ──────────────────────────────────────────────
-        client.on('message_reaction', async (reaction) => {
+        client.on('message_reaction', (reaction) => {
             fireWebhook({
                 event:     'reaction',
                 timestamp: Date.now(),
@@ -703,7 +688,7 @@ async function start() {
             });
         });
 
-        console.log('🚀 Initializing WhatsApp...');
+        console.log('🚀 Initializing WhatsApp client...');
         botStatus = 'starting';
         await client.initialize();
 
@@ -726,6 +711,7 @@ const IGNORABLE = [
     e => e?.message?.includes('Execution context was destroyed'),
     e => e?.message?.includes('Target closed'),
     e => e?.message?.includes('Session closed'),
+    e => e?.message?.includes('Protocol error'),
 ];
 
 process.on('unhandledRejection', (reason) => {
