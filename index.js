@@ -509,6 +509,9 @@ app.listen(PORT, '0.0.0.0', () => console.log(`🌐 Web server → http://0.0.0.
 // ─── WhatsApp bootstrap ───────────────────────────────────────────────────────
 async function start() {
     try {
+        // Ensure auth directory exists (may not exist on fresh container)
+        fs.mkdirSync(DATA_PATH, { recursive: true });
+
         clearLocalCache();
 
         console.log('📦 Connecting to MongoDB...');
@@ -712,6 +715,10 @@ const IGNORABLE = [
     e => e?.message?.includes('Target closed'),
     e => e?.message?.includes('Session closed'),
     e => e?.message?.includes('Protocol error'),
+    e => e?.message?.includes('Operation interrupted because client was closed'),
+    e => e?.message?.includes('Cannot use a session that has ended'),
+    e => e?.message?.includes('connection from closed connection pool'),
+    e => e?.message?.includes('Topology is closed'),
 ];
 
 process.on('unhandledRejection', (reason) => {
