@@ -86,6 +86,8 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 let botStatus      = 'starting';
 let waClient       = null;
 let sessionSavedAt = null;
+let isStarting     = false;   // guard against overlapping start() calls
+let isReady        = false;   // tracks if WA client has fired 'ready'
 const startTime    = Date.now();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -230,6 +232,9 @@ function createFixedStore(mongooseInstance) {
 
             const remaining = slots.length - toDelete.length;
             console.log(`✅ MongoDB upload done (${remaining}/${MAX_BACKUPS} slots) @ ${formatTime(new Date())}`);
+
+            // Clean up local zip after successful upload
+            try { fs.unlinkSync(zipPath); } catch { /* already removed by wwebjs internals */ };
         },
 
         async extract(options) {
@@ -322,13 +327,9 @@ app.get('/', (req, res) => {
 });
 
 // ─── Health check — no auth, for HF uptime monitor & load balancer ────────────
-app.get('/api/health', (req, res) => {
-    res.json({
-        success: true,
-        status:  botStatus,
-        uptime:  formatUptime((Date.now() - startTime) / 1000),
-    });
-});
+app.get('/api/health', (req, res) => res.status(200).json({ success: true, status: botStatus, uptime: formatUptime((Date.now() - startTime) / 1000) }));
+app.get('/healthz', (req, res) => res.status(200).send('ok'));
+app.get('/_health', (req, res) => res.status(200).send('ok'));
 
 // ─── Status ───────────────────────────────────────────────────────────────────
 app.get('/api/status', requireApiKey, (req, res) => {
@@ -508,6 +509,11 @@ app.listen(PORT, '0.0.0.0', () => console.log(`🌐 Web server → http://0.0.0.
 
 // ─── WhatsApp bootstrap ───────────────────────────────────────────────────────
 async function start() {
+    if (isStarting) {
+        console.warn('⚠️  start() called while already starting — ignoring duplicate');
+        return;
+    }
+    isStarting = true;
     try {
         // Ensure auth directory exists (may not exist on fresh container)
         fs.mkdirSync(DATA_PATH, { recursive: true });
@@ -578,7 +584,6 @@ async function start() {
             scheduleRestart(10000);
         });
 
-        let isReady = false;
         client.on('ready', () => {
             if (isReady) {
                 console.log('🔄 WhatsApp internal refresh — still ready ✅');
@@ -601,9 +606,10 @@ async function start() {
         });
 
         client.on('disconnected', (reason) => {
-            botStatus = 'disconnected';
-            waClient  = null;
-            isReady   = false;
+            botStatus  = 'disconnected';
+            waClient   = null;
+            isReady    = false;
+            isStarting = false;
             console.warn('⚠️  Disconnected:', reason);
             scheduleRestart(10000);
         });
@@ -697,20 +703,22 @@ async function start() {
 
     } catch (err) {
         console.error('❌ Startup error:', err.message);
+        isStarting = false;
         scheduleRestart(15000);
     }
 }
 
 async function scheduleRestart(ms) {
     console.log(`🔄 Restarting in ${ms / 1000}s...`);
-    waClient = null;
+    waClient    = null;
+    isStarting  = false;   // allow start() to run again after restart
     try { await mongoose.connection.close(); } catch { /* ignore */ }
     setTimeout(() => start(), ms);
 }
 
 // ─── Global error guards ──────────────────────────────────────────────────────
 const IGNORABLE = [
-    e => e?.code === 'ENOENT' && ['scandir', 'readdir'].includes(e?.syscall),
+    e => e?.code === 'ENOENT' && ['scandir', 'readdir', 'unlink'].includes(e?.syscall),
     e => e?.message?.includes('Execution context was destroyed'),
     e => e?.message?.includes('Target closed'),
     e => e?.message?.includes('Session closed'),
