@@ -514,6 +514,7 @@ async function start() {
         return;
     }
     isStarting = true;
+    isReady    = false;  // reset for this new client instance
     try {
         // Ensure auth directory exists (may not exist on fresh container)
         fs.mkdirSync(DATA_PATH, { recursive: true });
@@ -728,6 +729,25 @@ const IGNORABLE = [
     e => e?.message?.includes('connection from closed connection pool'),
     e => e?.message?.includes('Topology is closed'),
 ];
+
+// ─── Graceful shutdown (Railway SIGTERM) ─────────────────────────────────────
+process.on('SIGTERM', async () => {
+    console.log('🛑 SIGTERM received — shutting down gracefully...');
+    isStarting = false;
+    botStatus  = 'disconnected';
+    if (waClient) {
+        try { await waClient.destroy(); } catch { /* ignore */ }
+        waClient = null;
+    }
+    try { await mongoose.connection.close(); } catch { /* ignore */ }
+    console.log('✅ Shutdown complete');
+    process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+    console.log('🛑 SIGINT received — shutting down...');
+    process.emit('SIGTERM');
+});
 
 process.on('unhandledRejection', (reason) => {
     if (IGNORABLE.some(fn => fn(reason))) return;
