@@ -1162,14 +1162,8 @@ async function handleFinanceMessage(msg) {
     }
     if (data.error === 'bukan_perintah_valid') { console.log('Non-finance — ignored'); return; }
 
-    // TRANSAKSI TANPA NOMINAL — tanya balik
-    if (data.missing_nominal === true) {
-        const tipeStr = (data.tipe || '').toUpperCase() === 'PEMASUKAN' ? 'pemasukan' : 'pengeluaran';
-        const descStr = data.deskripsi ? ' (' + data.deskripsi + ')' : '';
-        await msg.reply('Berapa nominalnya untuk ' + tipeStr + descStr + '? (contoh: 500rb, 1.5jt)')
-            .catch(e => console.error('Reply: ' + e.message));
-        return;
-    }
+    // TRANSAKSI TANPA NOMINAL — abaikan diam-diam
+    if (data.missing_nominal === true) { console.log('Missing nominal — ignored'); return; }
 
     let sheet;
     try { sheet = await getSheet(); }
