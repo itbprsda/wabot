@@ -462,12 +462,15 @@ Jika TIDAK ADA angka/kata bilangan sama sekali → WAJIB gunakan missing_nominal
 4. CEK SALDO TANGGAL:
    -> {"command":"cek_saldo_tanggal","tanggal":"DD/MM/YYYY"}
 
-5. REKAP BULANAN:
+5. REKAP BULANAN — WAJIB ada sebutan bulan/periode eksplisit (nama bulan, angka bulan, "bulan ini", "bulan lalu"):
    -> {"command":"rekap_bulanan","bulan":"MM/YYYY"}
    (Bulan saat ini: 02/2026)
+   Contoh valid  : "rekap februari", "laporan bulan ini", "rekap 01/2026", "summary bulan lalu"
+   Contoh TIDAK valid: "nnti rekap ulang", "rekap dong", "bisa rekap?" → {"error":"bukan_perintah_valid"}
 
-6. LAINNYA (sapaan, tidak relevan):
+6. LAINNYA — sapaan, percakapan biasa, perintah tidak lengkap, tidak ada data keuangan:
    -> {"error":"bukan_perintah_valid"}
+   Contoh: "nnti rekap ulang", "oke", "makasih", "nanti aja", "coba lagi" → {"error":"bukan_perintah_valid"}
 
 PENTING: output HANYA JSON murni, tanpa teks lain atau markdown.`;
 
@@ -1149,10 +1152,19 @@ async function handleFinanceMessage(msg) {
 
     let data = await parseWithHuggingFace(msg.body);
 
-    // Safety net: if AI returned a nominal but message had no numeric content, override to missing_nominal
+    // Safety net 1: if AI returned a nominal but message had no numeric content, override to missing_nominal
     if (!hasNumeric && data.nominal !== undefined) {
         console.warn('[AI] Hallucinated nominal ' + data.nominal + ' — overriding to missing_nominal');
         data = { missing_nominal: true, tipe: data.tipe, deskripsi: data.deskripsi };
+    }
+
+    // Safety net 2: rekap_bulanan requires an explicit month/period reference in the message
+    if (data.command === 'rekap_bulanan') {
+        const hasMonth = /\b(jan|feb|mar|apr|mei|jun|jul|agu|sep|okt|nov|des|januari|februari|maret|april|juni|juli|agustus|september|oktober|november|desember|bulan\s*(ini|lalu|kemarin)|\d{1,2}[\/-]\d{4})\b/i.test(msg.body);
+        if (!hasMonth) {
+            console.warn('[AI] rekap_bulanan without month reference — ignored: ' + msg.body.slice(0, 60));
+            data = { error: 'bukan_perintah_valid' };
+        }
     }
 
     if (data.error === true) {
