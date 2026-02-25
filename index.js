@@ -695,10 +695,45 @@ function renderDashboard(rekap, bulan, txRows) {
     const expArc = total > 0 ? +(rekap.totalPengeluaran / total * C).toFixed(2) : 0;
     const incArc = total > 0 ? +(rekap.totalPemasukan / total * C).toFixed(2) : 0;
 
-    const iconMap = { gaji: '💰', angsuran: '🏠', bayar: '💸', iuran: '👥', tambahan: '➕', arisan: '🤝', makan: '🍜', listrik: '💡', bensin: '⛽', pulsa: '📱', beli: '🛍️', transfer: '🔄' };
+    const iconMap = {
+        // Pemasukan
+        gaji: '💼', salary: '💼', upah: '💼',
+        bonus: '🎁', thr: '🎁', hadiah: '🎁',
+        transfer: '💸', kirim: '💸',
+        freelance: '💻', proyek: '💻', project: '💻',
+        investasi: '📈', dividen: '📈', bunga: '📈',
+        arisan: '🤝', iuran: '🤝',
+        tambahan: '➕', lain: '➕',
+        // Pengeluaran — makanan
+        makan: '🍜', minum: '🧋', kopi: '☕', cafe: '☕', resto: '🍽️',
+        jajan: '🍡', snack: '🍡', bakso: '🍜', nasi: '🍚',
+        // Transportasi
+        bensin: '⛽', bbm: '⛽', parkir: '🅿️',
+        grab: '🚗', gojek: '🚗', ojek: '🚗', taxi: '🚕', bus: '🚌',
+        // Tagihan
+        listrik: '💡', air: '💧', pdam: '💧', internet: '🌐', wifi: '🌐',
+        pulsa: '📱', paket: '📱', telp: '📱',
+        // Belanja
+        beli: '🛒', belanja: '🛒', shopee: '🛒', tokopedia: '🛒', lazada: '🛒',
+        indomaret: '🏪', alfamart: '🏪', minimarket: '🏪',
+        // Cicilan / tagihan besar
+        angsuran: '🏠', kpr: '🏠', sewa: '🏠', kontrakan: '🏠', kos: '🏠', rent: '🏠',
+        kartu: '💳', kredit: '💳',
+        // Kesehatan
+        dokter: '🏥', obat: '💊', apotek: '💊', rs: '🏥', rumah sakit: '🏥',
+        // Pendidikan
+        sekolah: '🎓', kuliah: '🎓', kursus: '🎓', les: '🎓',
+        // Hiburan
+        game: '🎮', netflix: '🎬', spotify: '🎵', bioskop: '🎬',
+        // Bank/dompet digital
+        bni: '🏦', bca: '🏦', bri: '🏦', mandiri: '🏦', bank: '🏦',
+        dana: '👛', ovo: '👛', gopay: '👛', shopeepay: '👛', dompet: '👛',
+    };
     function getIcon(desc) {
         const d = (desc || '').toLowerCase();
-        for (const [k, v] of Object.entries(iconMap)) if (d.includes(k)) return v;
+        // Match longer keys first to avoid partial matches
+        const sorted = Object.entries(iconMap).sort((a, b) => b[0].length - a[0].length);
+        for (const [k, v] of sorted) if (d.includes(k)) return v;
         return '📋';
     }
 
@@ -1137,10 +1172,15 @@ async function handleFinanceMessage(msg) {
 
     if (msg.body === '!ping') { await msg.reply('pong!').catch(e => console.error('Reply: ' + e.message)); return; }
     if (msg.body === '!status') {
-        await msg.reply('*Bot Status*\n\nStatus: ' + botStatus + '\nSession: ' + SESSION_NAME +
-            '\nUptime: ' + formatUptime((Date.now() - startTime) / 1000) +
-            '\nLast Backup: ' + (sessionSavedAt || 'Not yet'))
-            .catch(e => console.error('Reply: ' + e.message));
+        await msg.reply(
+            '╔════════════════════╗\n' +
+            '  🤖  *BOT STATUS*\n' +
+            '╚════════════════════╝\n\n' +
+            '🟢  Status: ' + botStatus + '\n' +
+            '🔖  Sesi  : ' + SESSION_NAME + '\n' +
+            '⏱️  Uptime: ' + formatUptime((Date.now() - startTime) / 1000) + '\n' +
+            '💾  Backup: ' + (sessionSavedAt || 'Belum ada')
+        ).catch(e => console.error('Reply: ' + e.message));
         return;
     }
 
@@ -1189,16 +1229,28 @@ async function handleFinanceMessage(msg) {
         try {
             const bulanCari = data.bulan;
             const rekap = await generateRekapBulanan(sheet, bulanCari);
-            let teks = '*Laporan Bulan: ' + bulanCari + '*\n\n';
-            teks += '```\nTGL   | TIPE   | NOMINAL           | KET\n';
-            teks += '-------------------------------------------------------\n';
-            if (!rekap.listTransaksi.length) teks += '(Belum ada data)\n';
-            else rekap.listTransaksi.forEach(tx => { teks += tx + '\n'; });
-            teks += '-------------------------------------------------------```\n\n';
-            teks += 'Total Pemasukan : ' + rupiahFmt(rekap.totalPemasukan) + '\n';
-            teks += 'Total Pengeluaran: ' + rupiahFmt(rekap.totalPengeluaran) + '\n';
-            teks += '*Saldo Bersih   : ' + rupiahFmt(rekap.saldo) + '*\n\n';
-            teks += '*Spreadsheet:*\nhttps://docs.google.com/spreadsheets/d/' + SPREADSHEET_ID;
+            const saldoRekap = rekap.saldo;
+            const saldoRekapIcon = saldoRekap >= 0 ? '✅' : '⚠️';
+            let teks = '╔════════════════════╗\n';
+            teks += '  📊  *REKAP ' + bulanCari + '*\n';
+            teks += '╚════════════════════╝\n\n';
+            teks += '📈  Pemasukan\n';
+            teks += '    *' + rupiahFmt(rekap.totalPemasukan) + '*\n\n';
+            teks += '📉  Pengeluaran\n';
+            teks += '    *' + rupiahFmt(rekap.totalPengeluaran) + '*\n\n';
+            teks += '─────────────────────\n';
+            teks += saldoRekapIcon + '  Saldo Bersih\n';
+            teks += '    *' + rupiahFmt(saldoRekap) + '*\n\n';
+            if (rekap.listTransaksi.length) {
+                teks += '─────────────────────\n';
+                teks += '🗒️  *Transaksi (' + rekap.listTransaksi.length + ')*\n';
+                teks += '```\n';
+                rekap.listTransaksi.forEach(tx => { teks += tx + '\n'; });
+                teks += '```\n';
+            } else {
+                teks += '_Belum ada transaksi bulan ini_\n';
+            }
+            teks += '\n📋  *Spreadsheet:*\nhttps://docs.google.com/spreadsheets/d/' + SPREADSHEET_ID;
 
             // Generate dashboard key and include in URL
             if (PUBLIC_URL) {
@@ -1227,11 +1279,20 @@ async function handleFinanceMessage(msg) {
         try {
             const tglCari = data.command === 'cek_saldo_tanggal' ? data.tanggal : null;
             const r2 = await hitungSaldo(sheet, tglCari);
-            const judul = tglCari ? '*Saldo Tanggal ' + tglCari + '*' : '*Posisi Saldo Saat Ini*';
-            await msg.reply(judul + '\n\nPemasukan  : ' + rupiahFmt(r2.totalPemasukan) +
-                '\nPengeluaran: ' + rupiahFmt(r2.totalPengeluaran) +
-                '\n*Saldo     : ' + rupiahFmt(r2.saldo) + '*')
-                .catch(e => console.error('Reply: ' + e.message));
+            const judulStr = tglCari ? '📅  Saldo ' + tglCari : '💼  Saldo Saat Ini';
+            const saldoSign = r2.saldo >= 0 ? '✅' : '⚠️';
+            await msg.reply(
+                '╔════════════════════╗\n' +
+                '  ' + judulStr + '\n' +
+                '╚════════════════════╝\n\n' +
+                '📈  Pemasukan\n' +
+                '    *' + rupiahFmt(r2.totalPemasukan) + '*\n\n' +
+                '📉  Pengeluaran\n' +
+                '    *' + rupiahFmt(r2.totalPengeluaran) + '*\n\n' +
+                '─────────────────────\n' +
+                saldoSign + '  Saldo Bersih\n' +
+                '    *' + rupiahFmt(r2.saldo) + '*'
+            ).catch(e => console.error('Reply: ' + e.message));
         } catch (err) {
             await msg.reply('Gagal mengambil saldo: ' + err.message).catch(e => console.error('Reply: ' + e.message));
         }
@@ -1263,11 +1324,21 @@ async function handleFinanceMessage(msg) {
                 'Saldo Akhir': saldoBaru,
             });
 
-            await msg.reply('*Data Tersimpan!*\nKet    : ' + data.deskripsi +
-                '\nNominal: ' + rupiahFmt(parsedNominal) +
-                '\nTipe   : ' + data.tipe +
-                '\n\n*Sisa Saldo: ' + rupiahFmt(saldoBaru) + '*')
-                .catch(e => console.error('Reply: ' + e.message));
+            const isIn = (tipeTx === 'PEMASUKAN' || tipeTx === 'DEBIT');
+            const arrow = isIn ? '📈' : '📉';
+            const tipeLabel = isIn ? '🟢 Pemasukan' : '🔴 Pengeluaran';
+            const saldoIcon = saldoBaru >= 0 ? '✅' : '⚠️';
+            await msg.reply(
+                '╔════════════════════╗\n' +
+                '  ' + arrow + '  *TERCATAT*\n' +
+                '╚════════════════════╝\n\n' +
+                '📝  ' + (data.deskripsi || '-') + '\n' +
+                '💵  *' + rupiahFmt(parsedNominal) + '*\n' +
+                '🏷️  ' + tipeLabel + '\n\n' +
+                '─────────────────────\n' +
+                saldoIcon + '  Saldo sekarang\n' +
+                '    *' + rupiahFmt(saldoBaru) + '*'
+            ).catch(e => console.error('Reply: ' + e.message));
             console.log('Transaction saved: ' + data.tipe + ' ' + rupiahFmt(parsedNominal));
 
             const nowMonth = formatDateID(now8).substring(3); // MM/YYYY
