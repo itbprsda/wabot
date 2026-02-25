@@ -13,15 +13,28 @@ const http = require('http');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const creds = require('./google-creds.json');
 const { HfInference } = require('@huggingface/inference');
 
 // ─── VALIDATE REQUIRED ENV VARS ───────────────────────────────────────────────
-const REQUIRED_ENV = ['MONGODB_URI', 'GEMINI_API_KEY', 'HF_TOKEN'];
+const REQUIRED_ENV = ['MONGODB_URI', 'GEMINI_API_KEY', 'HF_TOKEN', 'GOOGLE_CREDS_JSON', 'SPREADSHEET_ID'];
 const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]);
 if (missingEnv.length > 0) {
     console.error(`❌ Missing required environment variables: ${missingEnv.join(', ')}`);
     console.error('   Set them in your .env file or Railway environment settings.');
+    process.exit(1);
+}
+
+// ─── LOAD GOOGLE CREDENTIALS ──────────────────────────────────────────────
+let creds;
+try {
+    creds = JSON.parse(process.env.GOOGLE_CREDS_JSON);
+    if (!creds.client_email || !creds.private_key) {
+        throw new Error('Missing client_email or private_key in GOOGLE_CREDS_JSON');
+    }
+    console.log(`✅ Google creds loaded for: ${creds.client_email}`);
+} catch (e) {
+    console.error(`❌ Failed to parse GOOGLE_CREDS_JSON: ${e.message}`);
+    console.error('   Make sure the value is the full JSON content of your google-creds.json file.');
     process.exit(1);
 }
 
