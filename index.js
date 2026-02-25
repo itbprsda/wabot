@@ -720,7 +720,7 @@ function renderDashboard(rekap, bulan, txRows) {
         angsuran: '🏠', kpr: '🏠', sewa: '🏠', kontrakan: '🏠', kos: '🏠', rent: '🏠',
         kartu: '💳', kredit: '💳',
         // Kesehatan
-        dokter: '🏥', obat: '💊', apotek: '💊', rs: '🏥', rumah sakit: '🏥',
+        dokter: '🏥', obat: '💊', apotek: '💊', rs: '🏥', 'rumah sakit': '🏥',
         // Pendidikan
         sekolah: '🎓', kuliah: '🎓', kursus: '🎓', les: '🎓',
         // Hiburan
