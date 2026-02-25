@@ -1,5 +1,7 @@
 node_modules/
 .wwebjs_auth/
 .wwebjs_cache/
+.chrome-data
 .env
 *.log
+google-creds.json

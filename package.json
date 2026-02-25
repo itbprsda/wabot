@@ -12,14 +12,19 @@
     "postinstall": "node fix-remoteauth.js"
   },
   "dependencies": {
-    "whatsapp-web.js": "^1.34.6",
-    "qrcode-terminal": "^0.12.0",
-    "wwebjs-mongo": "^1.0.2",
-    "mongoose": "^8.0.3",
-    "express": "^4.18.2",
-    "dotenv": "^16.4.5",
+    "@google/generative-ai": "^0.24.1",
+    "@huggingface/inference": "^4.13.13",
     "archiver": "^6.0.1",
-    "fs-extra": "^11.2.0"
+    "axios": "^1.13.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2",
+    "fs-extra": "^11.2.0",
+    "google-auth-library": "^10.6.1",
+    "google-spreadsheet": "^5.2.0",
+    "mongoose": "^8.0.3",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.34.6",
+    "wwebjs-mongo": "^1.0.2"
   },
   "devDependencies": {
     "puppeteer": "^21.0.0"
