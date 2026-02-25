@@ -421,39 +421,40 @@ async function designSheet(bulanStr) {
 
 // ─── AI PARSING ───────────────────────────────────────────────────────────────
 const AI_SYSTEM_PROMPT = `Kamu adalah asisten keuangan pribadi yang cerdas, ramah, dan fleksibel.
-Tugasmu: baca pesan user (termasuk singkatan, typo, bahasa gaul) dan klasifikasikan ke format JSON murni.
+Tugasmu: baca pesan user dan klasifikasikan ke format JSON murni.
 
-=== KONVERSI NOMINAL ===
-Selalu konversi ke angka bulat:
-- jt/juta/jt/jt. = x1.000.000  → "2jt"=2000000, "1.5juta"=1500000, "sejuta"=1000000
-- rb/ribu/k/rbu  = x1.000       → "500rb"=500000, "50k"=50000, "10ribu"=10000
-- angka polos < 10000 yang konteksnya uang → anggap ribuan → "500"=500000, "150"=150000
-- angka polos >= 10000 → nilai asli → "50000"=50000
+=== ATURAN NOMINAL — WAJIB DIIKUTI ===
+HANYA ekstrak nominal jika ada angka/kata bilangan EKSPLISIT dalam pesan.
+DILARANG KERAS mengarang, mengasumsikan, atau menebak nominal jika tidak ada angka.
+Kata bilangan yang valid: angka (1, 500, 1000), jt/juta, rb/ribu/k, sejuta, setengah juta, dll.
+Jika TIDAK ADA angka/kata bilangan sama sekali → WAJIB gunakan missing_nominal.
+
+=== KONVERSI NOMINAL (hanya jika ada angka eksplisit) ===
+- jt/juta = x1.000.000  → "2jt"=2000000, "1.5juta"=1500000, "sejuta"=1000000
+- rb/ribu/k = x1.000    → "500rb"=500000, "50k"=50000
+- angka polos < 10000 dalam konteks uang → ribuan → "500"=500000, "25"=25000
+- angka polos >= 10000 → nilai asli → "75000"=75000
 - "setengah juta"=500000, "seperempat juta"=250000
 
 === NORMALISASI TEKS ===
-Kenali singkatan/typo umum:
-- msuk/msk/masuk/dapet/nerima/trima = PEMASUKAN
-- kluar/klr/bayar/byr/beli/bli/transfer keluar/kirim = PENGELUARAN
-- bni/bca/bri/mandiri/dana/ovo/gopay/shopeepay = nama bank/dompet (masukkan ke deskripsi)
-- blm/belum, d/di, yg/yang, catet/catat, itu/tsb = kata penghubung biasa
+- msuk/msk/masuk/dapet/nerima/trima/masuk = PEMASUKAN
+- kluar/klr/bayar/byr/beli/bli/kirim = PENGELUARAN
+- bni/bca/bri/mandiri/dana/ovo/gopay = nama bank (masukkan ke deskripsi)
+- blm/belum, d/di, yg/yang, catet/catat = kata penghubung (abaikan)
 
-=== ATURAN KLASIFIKASI ===
+=== KLASIFIKASI ===
 
-1. TRANSAKSI (ada nominal): 
-   -> {"nominal": angka, "tipe": "PEMASUKAN"/"PENGELUARAN", "deskripsi": "teks deskripsi bersih"}
-   Deskripsi: tulis ulang dengan bahasa normal, singkat, informatif. Sertakan nama bank/platform jika ada.
-   Contoh input  : "blm d catet transfer masuk bni 1jt"
-   Contoh output : {"nominal":1000000,"tipe":"PEMASUKAN","deskripsi":"Transfer masuk BNI"}
-   Contoh input  : "byr listrik 150rb"
-   Contoh output : {"nominal":150000,"tipe":"PENGELUARAN","deskripsi":"Bayar listrik"}
-   Contoh input  : "dapet gaji 3.5jt"
-   Contoh output : {"nominal":3500000,"tipe":"PEMASUKAN","deskripsi":"Gaji"}
-   Contoh input  : "jajan 25"
-   Contoh output : {"nominal":25000,"tipe":"PENGELUARAN","deskripsi":"Jajan"}
+1. TRANSAKSI ADA NOMINAL — ada angka/bilangan eksplisit dalam pesan:
+   -> {"nominal": angka, "tipe": "PEMASUKAN"/"PENGELUARAN", "deskripsi": "..."}
+   Contoh: "transfer masuk bni 1jt"    -> {"nominal":1000000,"tipe":"PEMASUKAN","deskripsi":"Transfer masuk BNI"}
+   Contoh: "byr listrik 150rb"         -> {"nominal":150000,"tipe":"PENGELUARAN","deskripsi":"Bayar listrik"}
+   Contoh: "jajan 25"                  -> {"nominal":25000,"tipe":"PENGELUARAN","deskripsi":"Jajan"}
 
-2. TRANSAKSI tanpa nominal (jelas transaksi tapi tidak ada angka sama sekali):
+2. TRANSAKSI TANPA NOMINAL — ada maksud transaksi tapi TIDAK ADA angka/bilangan sama sekali:
    -> {"missing_nominal": true, "tipe": "PEMASUKAN"/"PENGELUARAN", "deskripsi": "..."}
+   Contoh: "blm d catet yg msuk d bni itu"  -> {"missing_nominal":true,"tipe":"PEMASUKAN","deskripsi":"Transfer masuk BNI"}
+   Contoh: "catat pengeluaran bensin tadi"   -> {"missing_nominal":true,"tipe":"PENGELUARAN","deskripsi":"Bensin"}
+   Contoh: "ada transfer masuk"              -> {"missing_nominal":true,"tipe":"PEMASUKAN","deskripsi":"Transfer masuk"}
 
 3. CEK SALDO SEKARANG:
    -> {"command":"cek_saldo_sekarang"}
@@ -465,7 +466,7 @@ Kenali singkatan/typo umum:
    -> {"command":"rekap_bulanan","bulan":"MM/YYYY"}
    (Bulan saat ini: 02/2026)
 
-6. LAINNYA (sapaan, tidak relevan, tidak jelas):
+6. LAINNYA (sapaan, tidak relevan):
    -> {"error":"bukan_perintah_valid"}
 
 PENTING: output HANYA JSON murni, tanpa teks lain atau markdown.`;
@@ -1141,7 +1142,18 @@ async function handleFinanceMessage(msg) {
     }
 
     console.log('[AI] Processing: ' + msg.body.slice(0, 80));
-    const data = await parseWithHuggingFace(msg.body);
+
+    // Pre-check: does the message contain ANY numeric content?
+    // Covers digits, or words like juta/ribu/k/rb/sejuta/setengah
+    const hasNumeric = /\d|\bjt\b|\bjuta\b|\brb\b|\bribu\b|\bk\b|\bsejuta\b|\bsetengah juta\b|\bsejt\b|\bsrbu\b/i.test(msg.body);
+
+    let data = await parseWithHuggingFace(msg.body);
+
+    // Safety net: if AI returned a nominal but message had no numeric content, override to missing_nominal
+    if (!hasNumeric && data.nominal !== undefined) {
+        console.warn('[AI] Hallucinated nominal ' + data.nominal + ' — overriding to missing_nominal');
+        data = { missing_nominal: true, tipe: data.tipe, deskripsi: data.deskripsi };
+    }
 
     if (data.error === true) {
         await msg.reply('Maaf, AI tidak bisa memproses pesanmu. Coba lagi sebentar.')
