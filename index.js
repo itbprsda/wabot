@@ -4,21 +4,21 @@ require('dotenv').config();
 
 const { Client, RemoteAuth, MessageMedia, Location } = require('whatsapp-web.js');
 const mongoose = require('mongoose');
-const qrcode   = require('qrcode-terminal');
-const express  = require('express');
-const fs       = require('fs');
-const path     = require('path');
-const https    = require('https');
-const http     = require('http');
+const qrcode = require('qrcode-terminal');
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const http = require('http');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
-const { JWT }               = require('google-auth-library');
+const { JWT } = require('google-auth-library');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { HfInference }        = require('@huggingface/inference');
+const { HfInference } = require('@huggingface/inference');
 const crypto = require('crypto');
 
 // ─── VALIDATE REQUIRED ENV VARS ───────────────────────────────────────────────
 const REQUIRED_ENV = ['MONGODB_URI', 'GEMINI_API_KEY', 'HF_TOKEN', 'GOOGLE_CREDS_JSON'];
-const missingEnv   = REQUIRED_ENV.filter(k => !process.env[k]);
+const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]);
 if (missingEnv.length > 0) {
     console.error('Missing required environment variables: ' + missingEnv.join(', '));
     console.error('   Set them in your .env file or Railway environment settings.');
@@ -45,30 +45,30 @@ try {
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID || '12nM0fYtmEGRw5y170UDmWyaLWLu5T_tgWtjvEp6XedY';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const HF_TOKEN       = process.env.HF_TOKEN;
-const MONGODB_URI    = process.env.MONGODB_URI;
-const SESSION_NAME   = process.env.SESSION_NAME   || 'whatsapp-bot';
-const PORT           = parseInt(process.env.PORT  || '8000', 10);
-const API_KEY        = process.env.API_KEY        || 'changeme';
-const WEBHOOK_URL    = process.env.WEBHOOK_URL    || '';
+const HF_TOKEN = process.env.HF_TOKEN;
+const MONGODB_URI = process.env.MONGODB_URI;
+const SESSION_NAME = process.env.SESSION_NAME || 'whatsapp-bot';
+const PORT = parseInt(process.env.PORT || '8000', 10);
+const API_KEY = process.env.API_KEY || 'changeme';
+const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
-const PUBLIC_URL     = (process.env.PUBLIC_URL    || '').replace(/\/+$/, '');
+const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
 
 const ALLOWED_CHATS = (process.env.ALLOWED_CHATS || '6287759895339-1608597951@g.us')
     .split(',').map(id => id.trim()).filter(Boolean);
 
 const RATE_LIMIT_MS = parseInt(process.env.RATE_LIMIT_MS || '3000', 10);
-const IS_PROD       = !!process.env.PUPPETEER_EXECUTABLE_PATH;
+const IS_PROD = !!process.env.PUPPETEER_EXECUTABLE_PATH;
 
 const MAX_MEDIA_WEBHOOK_BYTES = 5 * 1024 * 1024;
-const MAX_WEBHOOK_ATTEMPTS    = 3;
-const BACKUP_INTERVAL         = IS_PROD ? 5 * 60 * 1000 : 60 * 1000;
+const MAX_WEBHOOK_ATTEMPTS = 3;
+const BACKUP_INTERVAL = IS_PROD ? 5 * 60 * 1000 : 60 * 1000;
 
 // Dashboard key expiry: 5 minutes (300,000 ms)
 const DASHBOARD_KEY_EXPIRY_MS = 5 * 60 * 1000;
 
-const DATA_PATH        = IS_PROD ? path.resolve('/app/.wwebjs_auth') : path.resolve(process.cwd(), '.wwebjs_auth');
-const CHROME_DATA_DIR  = IS_PROD ? path.resolve('/tmp/.chrome-data') : path.resolve(process.cwd(), '.chrome-data');
+const DATA_PATH = IS_PROD ? path.resolve('/app/.wwebjs_auth') : path.resolve(process.cwd(), '.wwebjs_auth');
+const CHROME_DATA_DIR = IS_PROD ? path.resolve('/tmp/.chrome-data') : path.resolve(process.cwd(), '.chrome-data');
 const SESSION_DIR_NAME = 'RemoteAuth-' + SESSION_NAME;
 
 // ─── STARTUP LOGS ─────────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ console.log('Session name : ' + SESSION_NAME);
 console.log('Backup every : ' + BACKUP_INTERVAL / 1000 + 's');
 console.log('API Key      : ' + (API_KEY === 'changeme' ? 'DEFAULT (unsafe!)' : 'Set'));
 console.log('Webhook URL  : ' + (WEBHOOK_URL || 'Not set'));
-console.log('Public URL   : ' + (PUBLIC_URL  || 'Not set'));
+console.log('Public URL   : ' + (PUBLIC_URL || 'Not set'));
 console.log('Port         : ' + PORT);
 console.log('Allowed Chats: ' + (ALLOWED_CHATS.length > 0 ? ALLOWED_CHATS.join(', ') : 'All'));
 
@@ -90,8 +90,8 @@ const serviceAccountAuth = new JWT({
 const doc = new GoogleSpreadsheet(SPREADSHEET_ID, serviceAccountAuth);
 
 // ─── AI CLIENTS ───────────────────────────────────────────────────────────────
-const genAI     = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model     = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-latest' });
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-latest' });
 const inference = new HfInference(HF_TOKEN);
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -154,11 +154,11 @@ function rupiahFmt(n) {
 // The collection always holds exactly ONE row.
 // On every rekap bulanan: wipe all rows, insert a fresh one.
 const DashboardAccessSchema = new mongoose.Schema({
-    bulan:      { type: String, required: true },
-    key:        { type: String, required: true },
-    createdAt:  { type: Date,    required: true },
-    lastAccess: { type: Date,    default: null },
-    isUsed:     { type: Boolean, default: false },
+    bulan: { type: String, required: true },
+    key: { type: String, required: true },
+    createdAt: { type: Date, required: true },
+    lastAccess: { type: Date, default: null },
+    isUsed: { type: Boolean, default: false },
 });
 
 function getDashboardAccessModel() {
@@ -236,12 +236,12 @@ async function hitungSaldo(sheet, filterTanggal) {
     rows.forEach(row => {
         const tgl = row.get('Tanggal'), nominalStr = row.get('Nominal'), tipe = row.get('Tipe');
         if (!tgl || !nominalStr) return;
-        const tglFull  = tgl.toString();
+        const tglFull = tgl.toString();
         const tglSheet = tglFull.includes(',') ? tglFull.split(',')[0].trim() : tglFull.trim();
-        const nominal  = parseInt(nominalStr.toString().replace(/\D/g, ''), 10) || 0;
+        const nominal = parseInt(nominalStr.toString().replace(/\D/g, ''), 10) || 0;
         if (!filterTanggal || tglSheet === filterTanggal) {
             const t = tipe ? tipe.toString().toUpperCase() : '';
-            if (t === 'PEMASUKAN' || t === 'DEBIT')    totalPemasukan   += nominal;
+            if (t === 'PEMASUKAN' || t === 'DEBIT') totalPemasukan += nominal;
             if (t === 'PENGELUARAN' || t === 'CREDIT') totalPengeluaran += nominal;
         }
     });
@@ -258,16 +258,16 @@ async function generateRekapBulanan(sheet, bulanStr) {
         if (!tgl || !nominalStr) return;
         const tglFull = tgl.toString();
         const tglHari = tglFull.includes(',') ? tglFull.split(',')[0].trim() : tglFull.trim();
-        const jam     = tglFull.includes(',') ? tglFull.split(',')[1].trim() : '';
+        const jam = tglFull.includes(',') ? tglFull.split(',')[1].trim() : '';
         if (!tglHari.endsWith(bulanStr)) return;
-        const nominal   = parseInt(nominalStr.toString().replace(/\D/g, ''), 10) || 0;
+        const nominal = parseInt(nominalStr.toString().replace(/\D/g, ''), 10) || 0;
         const tipeUpper = tipe ? tipe.toString().toUpperCase() : '';
         const tglPendek = tglHari.substring(0, 5);
-        const tipeStr   = (tipeUpper === 'PEMASUKAN' || tipeUpper === 'DEBIT') ? 'MASUK' : 'KELUAR';
-        const descStr   = deskripsi.length > 20 ? deskripsi.substring(0, 20) : deskripsi.padEnd(20, ' ');
+        const tipeStr = (tipeUpper === 'PEMASUKAN' || tipeUpper === 'DEBIT') ? 'MASUK' : 'KELUAR';
+        const descStr = deskripsi.length > 20 ? deskripsi.substring(0, 20) : deskripsi.padEnd(20, ' ');
         listTransaksi.push(tglPendek + ' | ' + tipeStr + ' | ' + rupiahFmt(nominal) + ' | ' + descStr);
         txRaw.push({ tgl: tglHari, jam, desc: deskripsi, nominal, tipe: tipeStr === 'MASUK' ? 'PEMASUKAN' : 'PENGELUARAN' });
-        if (tipeStr === 'MASUK')   totalPemasukan   += nominal;
+        if (tipeStr === 'MASUK') totalPemasukan += nominal;
         if (tipeStr === 'KELUAR') totalPengeluaran += nominal;
     });
     return { totalPemasukan, totalPengeluaran, saldo: totalPemasukan - totalPengeluaran, listTransaksi, txRaw };
@@ -297,51 +297,51 @@ async function designSheet(bulanStr) {
         const txList = [];
         filtered.forEach(row => {
             const nominal = parseInt((row.get('Nominal') || '0').toString().replace(/\D/g, ''), 10) || 0;
-            const tipe    = (row.get('Tipe') || '').toString().toUpperCase();
-            const tgl     = (row.get('Tanggal') || '').toString();
-            const desc    = (row.get('Deskripsi') || '').toString();
-            const isIn    = tipe === 'PEMASUKAN' || tipe === 'DEBIT';
+            const tipe = (row.get('Tipe') || '').toString().toUpperCase();
+            const tgl = (row.get('Tanggal') || '').toString();
+            const desc = (row.get('Deskripsi') || '').toString();
+            const isIn = tipe === 'PEMASUKAN' || tipe === 'DEBIT';
             if (isIn) totalPemasukan += nominal; else totalPengeluaran += nominal;
             txList.push({ tgl, desc, nominal, tipe: isIn ? 'PEMASUKAN' : 'PENGELUARAN' });
         });
         txList.sort((a, b) => b.tgl.localeCompare(a.tgl));
 
-        const saldo      = totalPemasukan - totalPengeluaran;
-        const total      = totalPemasukan + totalPengeluaran;
+        const saldo = totalPemasukan - totalPengeluaran;
+        const total = totalPemasukan + totalPengeluaran;
         const savingsPct = totalPemasukan > 0 ? (saldo / totalPemasukan * 100).toFixed(1) : '0.0';
-        const inPct      = total > 0 ? (totalPemasukan  / total * 100).toFixed(1) : '0.0';
-        const outPct     = total > 0 ? (totalPengeluaran / total * 100).toFixed(1) : '0.0';
-        const label      = bulanStr ? 'Bulan: ' + bulanStr : 'Semua Waktu';
+        const inPct = total > 0 ? (totalPemasukan / total * 100).toFixed(1) : '0.0';
+        const outPct = total > 0 ? (totalPengeluaran / total * 100).toFixed(1) : '0.0';
+        const label = bulanStr ? 'Bulan: ' + bulanStr : 'Semua Waktu';
 
-        const FIRST_TX  = 11;
+        const FIRST_TX = 11;
         const totalRows = FIRST_TX + txList.length + 2;
         await dash.resize({ rowCount: Math.max(totalRows, 50), columnCount: 5 });
         await dash.loadCells({ startRowIndex: 0, endRowIndex: totalRows, startColumnIndex: 0, endColumnIndex: 5 });
 
-        const BG      = { red: 0.055, green: 0.063, blue: 0.082 };
+        const BG = { red: 0.055, green: 0.063, blue: 0.082 };
         const SURFACE = { red: 0.094, green: 0.106, blue: 0.133 };
-        const BORDER  = { red: 0.141, green: 0.157, blue: 0.200 };
-        const INCOME  = { red: 0.212, green: 0.906, blue: 0.627 };
+        const BORDER = { red: 0.141, green: 0.157, blue: 0.200 };
+        const INCOME = { red: 0.212, green: 0.906, blue: 0.627 };
         const EXPENSE = { red: 1.000, green: 0.373, blue: 0.494 };
-        const ACCENT  = { red: 0.486, green: 0.424, blue: 0.988 };
-        const WHITE   = { red: 0.910, green: 0.918, blue: 0.941 };
-        const MUTED   = { red: 0.353, green: 0.380, blue: 0.502 };
+        const ACCENT = { red: 0.486, green: 0.424, blue: 0.988 };
+        const WHITE = { red: 0.910, green: 0.918, blue: 0.941 };
+        const MUTED = { red: 0.353, green: 0.380, blue: 0.502 };
         const DARK_IN = { red: 0.067, green: 0.102, blue: 0.094 };
         const DARK_EX = { red: 0.102, green: 0.067, blue: 0.086 };
-        const STRIPE  = { red: 0.082, green: 0.090, blue: 0.110 };
+        const STRIPE = { red: 0.082, green: 0.090, blue: 0.110 };
 
         const c = (r, col) => dash.getCell(r, col);
         function s(r, col, opts) {
             const cl = c(r, col);
-            if (opts.value   !== undefined) cl.value = opts.value;
-            if (opts.bg      !== undefined) cl.backgroundColor = opts.bg;
-            if (opts.align   !== undefined) cl.horizontalAlignment = opts.align;
-            if (opts.wrap    !== undefined) cl.wrapStrategy = opts.wrap ? 'WRAP' : 'CLIP';
+            if (opts.value !== undefined) cl.value = opts.value;
+            if (opts.bg !== undefined) cl.backgroundColor = opts.bg;
+            if (opts.align !== undefined) cl.horizontalAlignment = opts.align;
+            if (opts.wrap !== undefined) cl.wrapStrategy = opts.wrap ? 'WRAP' : 'CLIP';
             const tf = {};
-            if (opts.bold    !== undefined) tf.bold = opts.bold;
-            if (opts.size    !== undefined) tf.fontSize = opts.size;
-            if (opts.color   !== undefined) tf.foregroundColor = opts.color;
-            if (opts.italic  !== undefined) tf.italic = opts.italic;
+            if (opts.bold !== undefined) tf.bold = opts.bold;
+            if (opts.size !== undefined) tf.fontSize = opts.size;
+            if (opts.color !== undefined) tf.foregroundColor = opts.color;
+            if (opts.italic !== undefined) tf.italic = opts.italic;
             if (Object.keys(tf).length > 0) cl.textFormat = { ...cl.textFormat, ...tf };
         }
 
@@ -356,38 +356,38 @@ async function designSheet(bulanStr) {
 
         // Row 0 — Title
         for (let col = 0; col < 5; col++) s(0, col, { bg: SURFACE });
-        s(0, 0, { value: 'LAPORAN KEUANGAN', bold: true, size: 14, color: WHITE,  bg: SURFACE });
-        s(0, 2, { value: label,              bold: true, size: 11, color: ACCENT, bg: SURFACE, align: 'CENTER' });
+        s(0, 0, { value: 'LAPORAN KEUANGAN', bold: true, size: 14, color: WHITE, bg: SURFACE });
+        s(0, 2, { value: label, bold: true, size: 11, color: ACCENT, bg: SURFACE, align: 'CENTER' });
         s(0, 4, { value: new Date().toLocaleDateString('id-ID', { timeZone: 'Asia/Makassar' }), size: 9, color: MUTED, bg: SURFACE, align: 'RIGHT' });
 
         // Row 1 — spacer
         for (let col = 0; col < 5; col++) s(1, col, { bg: BG });
 
         // Rows 2–7 — Summary block
-        const left  = [
-            { label: 'TOTAL PEMASUKAN',   val: rupiahFmt(totalPemasukan),  color: INCOME,  bg: DARK_IN },
+        const left = [
+            { label: 'TOTAL PEMASUKAN', val: rupiahFmt(totalPemasukan), color: INCOME, bg: DARK_IN },
             { label: 'TOTAL PENGELUARAN', val: rupiahFmt(totalPengeluaran), color: EXPENSE, bg: DARK_EX },
-            { label: 'SALDO BERSIH',      val: rupiahFmt(saldo) + (saldo < 0 ? ' (-)' : ''), color: saldo >= 0 ? INCOME : EXPENSE, bg: SURFACE },
+            { label: 'SALDO BERSIH', val: rupiahFmt(saldo) + (saldo < 0 ? ' (-)' : ''), color: saldo >= 0 ? INCOME : EXPENSE, bg: SURFACE },
         ];
         const right = [
-            { label: 'RASIO PEMASUKAN',   val: inPct + '%',      color: INCOME,  bg: DARK_IN },
-            { label: 'RASIO PENGELUARAN', val: outPct + '%',     color: EXPENSE, bg: DARK_EX },
-            { label: 'TINGKAT TABUNGAN',  val: savingsPct + '%', color: ACCENT,  bg: SURFACE },
+            { label: 'RASIO PEMASUKAN', val: inPct + '%', color: INCOME, bg: DARK_IN },
+            { label: 'RASIO PENGELUARAN', val: outPct + '%', color: EXPENSE, bg: DARK_EX },
+            { label: 'TINGKAT TABUNGAN', val: savingsPct + '%', color: ACCENT, bg: SURFACE },
         ];
 
         left.forEach((item, i) => {
             const r = 2 + i * 2;
-            s(r,   0, { value: item.label, bold: true, size: 8,  color: MUTED,       bg: item.bg });
-            s(r,   1, { value: '',                                                      bg: item.bg });
-            s(r+1, 0, { value: item.val,   bold: true, size: 13, color: item.color,  bg: item.bg });
-            s(r+1, 1, { value: '',                                                      bg: item.bg });
+            s(r, 0, { value: item.label, bold: true, size: 8, color: MUTED, bg: item.bg });
+            s(r, 1, { value: '', bg: item.bg });
+            s(r + 1, 0, { value: item.val, bold: true, size: 13, color: item.color, bg: item.bg });
+            s(r + 1, 1, { value: '', bg: item.bg });
         });
         right.forEach((item, i) => {
             const r = 2 + i * 2;
-            s(r,   3, { value: item.label, bold: true, size: 8,  color: MUTED,       bg: item.bg });
-            s(r,   4, { value: '',                                                      bg: item.bg });
-            s(r+1, 3, { value: item.val,   bold: true, size: 13, color: item.color,  bg: item.bg });
-            s(r+1, 4, { value: '',                                                      bg: item.bg });
+            s(r, 3, { value: item.label, bold: true, size: 8, color: MUTED, bg: item.bg });
+            s(r, 4, { value: '', bg: item.bg });
+            s(r + 1, 3, { value: item.val, bold: true, size: 13, color: item.color, bg: item.bg });
+            s(r + 1, 4, { value: '', bg: item.bg });
         });
         // Divider column
         for (let r = 2; r <= 7; r++) s(r, 2, { value: '', bg: BORDER });
@@ -402,12 +402,12 @@ async function designSheet(bulanStr) {
 
         // Rows 10+ — transactions
         txList.forEach((tx, i) => {
-            const r   = 10 + i;
+            const r = 10 + i;
             const isIn = tx.tipe === 'PEMASUKAN';
-            const bg   = i % 2 === 0 ? BG : STRIPE;
-            s(r, 0, { value: tx.tgl,   size: 9, color: MUTED,  bg, align: 'LEFT'  });
-            s(r, 1, { value: tx.desc,  size: 9, color: WHITE,  bg, align: 'LEFT',  wrap: false });
-            s(r, 2, { value: tx.tipe,  size: 8, color: isIn ? INCOME : EXPENSE, bold: true, bg, align: 'LEFT' });
+            const bg = i % 2 === 0 ? BG : STRIPE;
+            s(r, 0, { value: tx.tgl, size: 9, color: MUTED, bg, align: 'LEFT' });
+            s(r, 1, { value: tx.desc, size: 9, color: WHITE, bg, align: 'LEFT', wrap: false });
+            s(r, 2, { value: tx.tipe, size: 8, color: isIn ? INCOME : EXPENSE, bold: true, bg, align: 'LEFT' });
             s(r, 3, { value: (isIn ? '+' : '-') + rupiahFmt(tx.nominal), size: 9, bold: true, color: isIn ? INCOME : EXPENSE, bg, align: 'RIGHT' });
             s(r, 4, { value: '', bg, align: 'RIGHT' });
         });
@@ -421,24 +421,51 @@ async function designSheet(bulanStr) {
 
 // ─── AI PARSING ───────────────────────────────────────────────────────────────
 const AI_SYSTEM_PROMPT = `Kamu adalah asisten keuangan pribadi yang cerdas, ramah, dan fleksibel.
-Tugasmu: baca pesan user dan klasifikasikan ke format JSON murni.
+Tugasmu: baca pesan user (termasuk singkatan, typo, bahasa gaul) dan klasifikasikan ke format JSON murni.
 
-Aturan:
-1. TRANSAKSI: pesan soal uang masuk/keluar
-   -> {"nominal": angka, "tipe": "PEMASUKAN"/"PENGELUARAN", "deskripsi": "..."}
-   Konversi: 50k->50000, 1.5jt->1500000, 10rb->10000
+=== KONVERSI NOMINAL ===
+Selalu konversi ke angka bulat:
+- jt/juta/jt/jt. = x1.000.000  → "2jt"=2000000, "1.5juta"=1500000, "sejuta"=1000000
+- rb/ribu/k/rbu  = x1.000       → "500rb"=500000, "50k"=50000, "10ribu"=10000
+- angka polos < 10000 yang konteksnya uang → anggap ribuan → "500"=500000, "150"=150000
+- angka polos >= 10000 → nilai asli → "50000"=50000
+- "setengah juta"=500000, "seperempat juta"=250000
 
-2. CEK SALDO SEKARANG: tanya saldo/sisa uang sekarang
+=== NORMALISASI TEKS ===
+Kenali singkatan/typo umum:
+- msuk/msk/masuk/dapet/nerima/trima = PEMASUKAN
+- kluar/klr/bayar/byr/beli/bli/transfer keluar/kirim = PENGELUARAN
+- bni/bca/bri/mandiri/dana/ovo/gopay/shopeepay = nama bank/dompet (masukkan ke deskripsi)
+- blm/belum, d/di, yg/yang, catet/catat, itu/tsb = kata penghubung biasa
+
+=== ATURAN KLASIFIKASI ===
+
+1. TRANSAKSI (ada nominal): 
+   -> {"nominal": angka, "tipe": "PEMASUKAN"/"PENGELUARAN", "deskripsi": "teks deskripsi bersih"}
+   Deskripsi: tulis ulang dengan bahasa normal, singkat, informatif. Sertakan nama bank/platform jika ada.
+   Contoh input  : "blm d catet transfer masuk bni 1jt"
+   Contoh output : {"nominal":1000000,"tipe":"PEMASUKAN","deskripsi":"Transfer masuk BNI"}
+   Contoh input  : "byr listrik 150rb"
+   Contoh output : {"nominal":150000,"tipe":"PENGELUARAN","deskripsi":"Bayar listrik"}
+   Contoh input  : "dapet gaji 3.5jt"
+   Contoh output : {"nominal":3500000,"tipe":"PEMASUKAN","deskripsi":"Gaji"}
+   Contoh input  : "jajan 25"
+   Contoh output : {"nominal":25000,"tipe":"PENGELUARAN","deskripsi":"Jajan"}
+
+2. TRANSAKSI tanpa nominal (jelas transaksi tapi tidak ada angka sama sekali):
+   -> {"missing_nominal": true, "tipe": "PEMASUKAN"/"PENGELUARAN", "deskripsi": "..."}
+
+3. CEK SALDO SEKARANG:
    -> {"command":"cek_saldo_sekarang"}
 
-3. CEK SALDO TANGGAL: tanya saldo tanggal tertentu
+4. CEK SALDO TANGGAL:
    -> {"command":"cek_saldo_tanggal","tanggal":"DD/MM/YYYY"}
 
-4. REKAP BULANAN: minta laporan/rekap bulan
+5. REKAP BULANAN:
    -> {"command":"rekap_bulanan","bulan":"MM/YYYY"}
    (Bulan saat ini: 02/2026)
 
-5. LAINNYA: sapaan, tidak relevan
+6. LAINNYA (sapaan, tidak relevan, tidak jelas):
    -> {"error":"bukan_perintah_valid"}
 
 PENTING: output HANYA JSON murni, tanpa teks lain atau markdown.`;
@@ -450,7 +477,7 @@ async function parseWithHuggingFace(message, retries) {
             model: 'Qwen/Qwen2.5-7B-Instruct',
             messages: [
                 { role: 'system', content: AI_SYSTEM_PROMPT },
-                { role: 'user',   content: message },
+                { role: 'user', content: message },
             ],
             max_tokens: 150, temperature: 0.1,
         });
@@ -507,15 +534,15 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
-let botStatus      = 'starting';
-let waClient       = null;
+let botStatus = 'starting';
+let waClient = null;
 let sessionSavedAt = null;
-let isStarting     = false;
-let isReady        = false;
-let qrData         = null;
-let currentClient  = null;
-let readyWatchdog  = null;
-const startTime    = Date.now();
+let isStarting = false;
+let isReady = false;
+let qrData = null;
+let currentClient = null;
+let readyWatchdog = null;
+const startTime = Date.now();
 
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
 function requireApiKey(req, res, next) {
@@ -533,12 +560,12 @@ function requireReady(req, res, next) {
 
 function renderStatusPage() {
     const statusMap = {
-        starting:      { icon: '◌',  badge: 'Memulai...',          hint: 'Bot sedang diinisialisasi, mohon tunggu.',      color: '#60a5fa' },
-        qr_ready:      { icon: '▣',  badge: 'Scan QR',             hint: 'Buka WhatsApp → Perangkat Tertaut → Tautkan.',  color: '#fbbf24' },
-        authenticated: { icon: '◎',  badge: 'Autentikasi...',       hint: 'Sesi berhasil, memuat WhatsApp...',             color: '#a78bfa' },
-        disconnected:  { icon: '✕',  badge: 'Terputus',            hint: 'Koneksi terputus, mencoba menghubungkan ulang.', color: '#f87171' },
+        starting: { icon: '◌', badge: 'Memulai...', hint: 'Bot sedang diinisialisasi, mohon tunggu.', color: '#60a5fa' },
+        qr_ready: { icon: '▣', badge: 'Scan QR', hint: 'Buka WhatsApp → Perangkat Tertaut → Tautkan.', color: '#fbbf24' },
+        authenticated: { icon: '◎', badge: 'Autentikasi...', hint: 'Sesi berhasil, memuat WhatsApp...', color: '#a78bfa' },
+        disconnected: { icon: '✕', badge: 'Terputus', hint: 'Koneksi terputus, mencoba menghubungkan ulang.', color: '#f87171' },
     };
-    const st  = statusMap[botStatus] || statusMap['starting'];
+    const st = statusMap[botStatus] || statusMap['starting'];
     const qrSection = (botStatus === 'qr_ready' && qrData)
         ? `<div class="qr-box">
             <img src="/api/qr" alt="QR Code" onerror="this.style.display='none'"/>
@@ -621,8 +648,8 @@ body{display:flex;align-items:center;justify-content:center}
 function renderDashboardExpired(reason) {
     const messages = {
         not_found: { title: 'Link Tidak Ditemukan', desc: 'Link dashboard ini tidak valid atau tidak pernah dibuat.' },
-        used:      { title: 'Link Sudah Digunakan', desc: 'Link dashboard ini sudah kedaluwarsa karena tidak aktif lebih dari 5 menit sejak terakhir dibuka.' },
-        expired:   { title: 'Link Kedaluwarsa',     desc: 'Link dashboard ini sudah kedaluwarsa. Link hanya berlaku 5 menit sejak pertama kali dibuat.' },
+        used: { title: 'Link Sudah Digunakan', desc: 'Link dashboard ini sudah kedaluwarsa karena tidak aktif lebih dari 5 menit sejak terakhir dibuka.' },
+        expired: { title: 'Link Kedaluwarsa', desc: 'Link dashboard ini sudah kedaluwarsa. Link hanya berlaku 5 menit sejak pertama kali dibuat.' },
     };
     const m = messages[reason] || messages['not_found'];
     return `<!DOCTYPE html>
@@ -657,14 +684,14 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 function renderDashboard(rekap, bulan, txRows) {
     const saldo = rekap.saldo;
     const total = rekap.totalPemasukan + rekap.totalPengeluaran;
-    const inPct      = total > 0 ? (rekap.totalPemasukan  / total * 100).toFixed(1) : '0.0';
-    const outPct     = total > 0 ? (rekap.totalPengeluaran / total * 100).toFixed(1) : '0.0';
+    const inPct = total > 0 ? (rekap.totalPemasukan / total * 100).toFixed(1) : '0.0';
+    const outPct = total > 0 ? (rekap.totalPengeluaran / total * 100).toFixed(1) : '0.0';
     const savingsPct = rekap.totalPemasukan > 0 ? (saldo / rekap.totalPemasukan * 100).toFixed(0) : '0';
-    const C          = 238.76;
-    const expArc     = total > 0 ? +(rekap.totalPengeluaran / total * C).toFixed(2) : 0;
-    const incArc     = total > 0 ? +(rekap.totalPemasukan   / total * C).toFixed(2) : 0;
+    const C = 238.76;
+    const expArc = total > 0 ? +(rekap.totalPengeluaran / total * C).toFixed(2) : 0;
+    const incArc = total > 0 ? +(rekap.totalPemasukan / total * C).toFixed(2) : 0;
 
-    const iconMap = { gaji:'💰', angsuran:'🏠', bayar:'💸', iuran:'👥', tambahan:'➕', arisan:'🤝', makan:'🍜', listrik:'💡', bensin:'⛽', pulsa:'📱', beli:'🛍️', transfer:'🔄' };
+    const iconMap = { gaji: '💰', angsuran: '🏠', bayar: '💸', iuran: '👥', tambahan: '➕', arisan: '🤝', makan: '🍜', listrik: '💡', bensin: '⛽', pulsa: '📱', beli: '🛍️', transfer: '🔄' };
     function getIcon(desc) {
         const d = (desc || '').toLowerCase();
         for (const [k, v] of Object.entries(iconMap)) if (d.includes(k)) return v;
@@ -1003,12 +1030,14 @@ async function fireWebhook(payload, attempt) {
     if (!WEBHOOK_URL) return;
     try {
         const body = JSON.stringify(payload);
-        const url  = new URL(WEBHOOK_URL);
+        const url = new URL(WEBHOOK_URL);
         const opts = {
             hostname: url.hostname, port: url.port || (url.protocol === 'https:' ? 443 : 80),
             path: url.pathname + url.search, method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body),
-                       ...(WEBHOOK_SECRET ? { 'X-Webhook-Secret': WEBHOOK_SECRET } : {}) },
+            headers: {
+                'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body),
+                ...(WEBHOOK_SECRET ? { 'X-Webhook-Secret': WEBHOOK_SECRET } : {})
+            },
             timeout: 10000,
         };
         await new Promise((resolve, reject) => {
@@ -1044,12 +1073,12 @@ function createFixedStore(mongooseInstance) {
     }
     return {
         async sessionExists(options) {
-            const sn  = path.basename(options.session);
+            const sn = path.basename(options.session);
             const col = mongooseInstance.connection.db.collection('whatsapp-' + sn + '.files');
             return await col.countDocuments({ filename: { $regex: '^' + sn + '\\.zip\\.' } }, { limit: 1 }) > 0;
         },
         async save(options) {
-            const sn      = path.basename(options.session);
+            const sn = path.basename(options.session);
             const zipPath = path.join(DATA_PATH, sn + '.zip');
             if (!fs.existsSync(zipPath)) { console.warn('Zip not found (skip): ' + zipPath); return; }
             const size = fs.statSync(zipPath).size;
@@ -1059,38 +1088,38 @@ function createFixedStore(mongooseInstance) {
             await new Promise((resolve, reject) => {
                 fs.createReadStream(zipPath).pipe(bucket.openUploadStream(slotName)).on('error', reject).on('close', resolve);
             });
-            const all    = await bucket.find({}).toArray();
-            const slots  = all.filter(d => d.filename.startsWith(sn + '.zip.')).sort((a, b) => a.uploadDate - b.uploadDate);
-            const toDel  = slots.slice(0, Math.max(0, slots.length - MAX_BACKUPS));
+            const all = await bucket.find({}).toArray();
+            const slots = all.filter(d => d.filename.startsWith(sn + '.zip.')).sort((a, b) => a.uploadDate - b.uploadDate);
+            const toDel = slots.slice(0, Math.max(0, slots.length - MAX_BACKUPS));
             for (const d of toDel) await bucket.delete(d._id);
             console.log('MongoDB upload done @ ' + formatTime(new Date()));
             try { fs.unlinkSync(zipPath); } catch (e) { if (e.code !== 'ENOENT') console.warn('unlink: ' + e.message); }
         },
         async extract(options) {
-            const sn      = path.basename(options.session);
+            const sn = path.basename(options.session);
             const zipPath = options.path;
-            const bucket  = getBucket(sn);
-            const all     = await bucket.find({}).toArray();
-            const slots   = all.filter(d => d.filename.startsWith(sn + '.zip.')).sort((a, b) => b.uploadDate - a.uploadDate);
+            const bucket = getBucket(sn);
+            const all = await bucket.find({}).toArray();
+            const slots = all.filter(d => d.filename.startsWith(sn + '.zip.')).sort((a, b) => b.uploadDate - a.uploadDate);
             if (!slots.length) throw new Error('No backup slots in MongoDB');
             for (let i = 0; i < slots.length; i++) {
                 const slot = slots[i];
-                if (slot.length < 1000) { console.warn('Slot ' + (i+1) + ' too small'); continue; }
+                if (slot.length < 1000) { console.warn('Slot ' + (i + 1) + ' too small'); continue; }
                 try {
                     await new Promise((resolve, reject) => {
                         bucket.openDownloadStreamByName(slot.filename).pipe(fs.createWriteStream(zipPath)).on('error', reject).on('close', resolve);
                     });
                     const dl = fs.existsSync(zipPath) ? fs.statSync(zipPath).size : 0;
-                    if (dl < 1000) { console.warn('Slot ' + (i+1) + ' empty'); continue; }
-                    console.log('Restored from slot ' + (i+1) + ': ' + (dl / 1024).toFixed(1) + ' KB'); return;
-                } catch (err) { console.warn('Slot ' + (i+1) + ' failed: ' + err.message); }
+                    if (dl < 1000) { console.warn('Slot ' + (i + 1) + ' empty'); continue; }
+                    console.log('Restored from slot ' + (i + 1) + ': ' + (dl / 1024).toFixed(1) + ' KB'); return;
+                } catch (err) { console.warn('Slot ' + (i + 1) + ' failed: ' + err.message); }
             }
             throw new Error('All backup slots failed');
         },
         async delete(options) {
-            const sn     = path.basename(options.session);
+            const sn = path.basename(options.session);
             const bucket = getBucket(sn);
-            const docs   = await bucket.find({}).toArray();
+            const docs = await bucket.find({}).toArray();
             for (const d of docs) await bucket.delete(d._id);
             console.log('Deleted ' + docs.length + ' slot(s): ' + sn);
         },
@@ -1121,6 +1150,15 @@ async function handleFinanceMessage(msg) {
     }
     if (data.error === 'bukan_perintah_valid') { console.log('Non-finance — ignored'); return; }
 
+    // TRANSAKSI TANPA NOMINAL — tanya balik
+    if (data.missing_nominal === true) {
+        const tipeStr = (data.tipe || '').toUpperCase() === 'PEMASUKAN' ? 'pemasukan' : 'pengeluaran';
+        const descStr = data.deskripsi ? ' (' + data.deskripsi + ')' : '';
+        await msg.reply('Berapa nominalnya untuk ' + tipeStr + descStr + '? (contoh: 500rb, 1.5jt)')
+            .catch(e => console.error('Reply: ' + e.message));
+        return;
+    }
+
     let sheet;
     try { sheet = await getSheet(); }
     catch (err) {
@@ -1132,14 +1170,14 @@ async function handleFinanceMessage(msg) {
     if (data.command === 'rekap_bulanan') {
         try {
             const bulanCari = data.bulan;
-            const rekap     = await generateRekapBulanan(sheet, bulanCari);
+            const rekap = await generateRekapBulanan(sheet, bulanCari);
             let teks = '*Laporan Bulan: ' + bulanCari + '*\n\n';
             teks += '```\nTGL   | TIPE   | NOMINAL           | KET\n';
             teks += '-------------------------------------------------------\n';
             if (!rekap.listTransaksi.length) teks += '(Belum ada data)\n';
             else rekap.listTransaksi.forEach(tx => { teks += tx + '\n'; });
             teks += '-------------------------------------------------------```\n\n';
-            teks += 'Total Pemasukan : ' + rupiahFmt(rekap.totalPemasukan)  + '\n';
+            teks += 'Total Pemasukan : ' + rupiahFmt(rekap.totalPemasukan) + '\n';
             teks += 'Total Pengeluaran: ' + rupiahFmt(rekap.totalPengeluaran) + '\n';
             teks += '*Saldo Bersih   : ' + rupiahFmt(rekap.saldo) + '*\n\n';
             teks += '*Spreadsheet:*\nhttps://docs.google.com/spreadsheets/d/' + SPREADSHEET_ID;
@@ -1170,8 +1208,8 @@ async function handleFinanceMessage(msg) {
     if (data.command === 'cek_saldo_sekarang' || data.command === 'cek_saldo_tanggal') {
         try {
             const tglCari = data.command === 'cek_saldo_tanggal' ? data.tanggal : null;
-            const r2      = await hitungSaldo(sheet, tglCari);
-            const judul   = tglCari ? '*Saldo Tanggal ' + tglCari + '*' : '*Posisi Saldo Saat Ini*';
+            const r2 = await hitungSaldo(sheet, tglCari);
+            const judul = tglCari ? '*Saldo Tanggal ' + tglCari + '*' : '*Posisi Saldo Saat Ini*';
             await msg.reply(judul + '\n\nPemasukan  : ' + rupiahFmt(r2.totalPemasukan) +
                 '\nPengeluaran: ' + rupiahFmt(r2.totalPengeluaran) +
                 '\n*Saldo     : ' + rupiahFmt(r2.saldo) + '*')
@@ -1191,19 +1229,19 @@ async function handleFinanceMessage(msg) {
         }
         try {
             const rekapNow = await hitungSaldo(sheet);
-            const tipeTx   = data.tipe ? data.tipe.toUpperCase() : '';
-            let saldoBaru  = rekapNow.saldo;
-            if (tipeTx === 'PEMASUKAN' || tipeTx === 'DEBIT')        saldoBaru += parsedNominal;
+            const tipeTx = data.tipe ? data.tipe.toUpperCase() : '';
+            let saldoBaru = rekapNow.saldo;
+            if (tipeTx === 'PEMASUKAN' || tipeTx === 'DEBIT') saldoBaru += parsedNominal;
             else if (tipeTx === 'PENGELUARAN' || tipeTx === 'CREDIT') saldoBaru -= parsedNominal;
 
             // Use GMT+8 time for sheet entry
             const now8 = nowGMT8();
             await sheet.addRow({
-                Tanggal:       formatDateID(now8) + ', ' + formatTimeLocal(now8),
-                Deskripsi:     sanitizeCell(data.deskripsi || ''),
-                Nominal:       parsedNominal,
-                Tipe:          sanitizeCell(data.tipe || ''),
-                User:          sanitizeCell(msg.pushname || msg.from),
+                Tanggal: formatDateID(now8) + ', ' + formatTimeLocal(now8),
+                Deskripsi: sanitizeCell(data.deskripsi || ''),
+                Nominal: parsedNominal,
+                Tipe: sanitizeCell(data.tipe || ''),
+                User: sanitizeCell(msg.pushname || msg.from),
                 'Saldo Akhir': saldoBaru,
             });
 
@@ -1232,11 +1270,13 @@ async function handleWebhookForward(msg) {
     const [contact, chat] = await Promise.all([msg.getContact().catch(() => null), msg.getChat().catch(() => null)]);
     const payload = {
         event: 'message', timestamp: Date.now(),
-        message: { id: msg.id._serialized, from: msg.from, to: msg.to, body: msg.body || '',
-                   type: msg.type, hasMedia: msg.hasMedia, isGroup: msg.from.endsWith('@g.us'),
-                   isForwarded: msg.isForwarded, timestamp: msg.timestamp },
+        message: {
+            id: msg.id._serialized, from: msg.from, to: msg.to, body: msg.body || '',
+            type: msg.type, hasMedia: msg.hasMedia, isGroup: msg.from.endsWith('@g.us'),
+            isForwarded: msg.isForwarded, timestamp: msg.timestamp
+        },
         contact: contact ? { name: contact.pushname || contact.name || '', number: contact.number } : null,
-        chat:    chat    ? { id: chat.id._serialized, name: chat.name, isGroup: chat.isGroup }        : null,
+        chat: chat ? { id: chat.id._serialized, name: chat.name, isGroup: chat.isGroup } : null,
     };
     if (msg.hasMedia) {
         try {
@@ -1275,14 +1315,16 @@ app.get('/api/qr', async (req, res) => {
 });
 
 app.get('/api/health', (req, res) => res.status(200).json({ ok: true }));
-app.get('/healthz',    (req, res) => res.status(200).send('ok'));
-app.get('/_health',    (req, res) => res.status(200).send('ok'));
+app.get('/healthz', (req, res) => res.status(200).send('ok'));
+app.get('/_health', (req, res) => res.status(200).send('ok'));
 
 app.get('/api/status', requireApiKey, (req, res) => {
-    res.json({ success: true, status: botStatus, session: SESSION_NAME,
-               environment: IS_PROD ? 'production' : 'development',
-               uptime: formatUptime((Date.now() - startTime) / 1000),
-               lastBackup: sessionSavedAt, webhookConfigured: !!WEBHOOK_URL });
+    res.json({
+        success: true, status: botStatus, session: SESSION_NAME,
+        environment: IS_PROD ? 'production' : 'development',
+        uptime: formatUptime((Date.now() - startTime) / 1000),
+        lastBackup: sessionSavedAt, webhookConfigured: !!WEBHOOK_URL
+    });
 });
 
 app.post('/api/send/text', requireApiKey, requireReady, async (req, res) => {
@@ -1290,7 +1332,7 @@ app.post('/api/send/text', requireApiKey, requireReady, async (req, res) => {
     if (!to || !message) return res.status(400).json({ success: false, error: 'Missing: to, message' });
     try {
         const chatId = normalizePhone(to);
-        const sent   = await withTimeout(waClient.sendMessage(chatId, message), 30000, 'sendMessage');
+        const sent = await withTimeout(waClient.sendMessage(chatId, message), 30000, 'sendMessage');
         res.json({ success: true, messageId: sent.id._serialized, to: chatId });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -1300,8 +1342,8 @@ app.post('/api/send/image', requireApiKey, requireReady, async (req, res) => {
     if (!to || (!url && !base64)) return res.status(400).json({ success: false, error: 'Missing: to, url or base64' });
     try {
         const chatId = normalizePhone(to);
-        const media  = url ? await MessageMedia.fromUrl(url, { unsafeMime: true }) : new MessageMedia(mime || 'image/jpeg', base64, filename || 'image.jpg');
-        const sent   = await withTimeout(waClient.sendMessage(chatId, media, { caption: caption || '' }), 30000, 'sendImage');
+        const media = url ? await MessageMedia.fromUrl(url, { unsafeMime: true }) : new MessageMedia(mime || 'image/jpeg', base64, filename || 'image.jpg');
+        const sent = await withTimeout(waClient.sendMessage(chatId, media, { caption: caption || '' }), 30000, 'sendImage');
         res.json({ success: true, messageId: sent.id._serialized, to: chatId });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -1311,8 +1353,8 @@ app.post('/api/send/file', requireApiKey, requireReady, async (req, res) => {
     if (!to || (!url && !base64)) return res.status(400).json({ success: false, error: 'Missing: to, url or base64' });
     try {
         const chatId = normalizePhone(to);
-        const media  = url ? await MessageMedia.fromUrl(url, { unsafeMime: true }) : new MessageMedia(mime || 'application/octet-stream', base64, filename || 'file');
-        const sent   = await withTimeout(waClient.sendMessage(chatId, media, { sendMediaAsDocument: true, caption: caption || '' }), 30000, 'sendFile');
+        const media = url ? await MessageMedia.fromUrl(url, { unsafeMime: true }) : new MessageMedia(mime || 'application/octet-stream', base64, filename || 'file');
+        const sent = await withTimeout(waClient.sendMessage(chatId, media, { sendMediaAsDocument: true, caption: caption || '' }), 30000, 'sendFile');
         res.json({ success: true, messageId: sent.id._serialized, to: chatId });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -1322,8 +1364,8 @@ app.post('/api/send/audio', requireApiKey, requireReady, async (req, res) => {
     if (!to || (!url && !base64)) return res.status(400).json({ success: false, error: 'Missing: to, url or base64' });
     try {
         const chatId = normalizePhone(to);
-        const media  = url ? await MessageMedia.fromUrl(url, { unsafeMime: true }) : new MessageMedia('audio/ogg; codecs=opus', base64, 'audio.ogg');
-        const sent   = await withTimeout(waClient.sendMessage(chatId, media, { sendAudioAsVoice: ptt !== false }), 30000, 'sendAudio');
+        const media = url ? await MessageMedia.fromUrl(url, { unsafeMime: true }) : new MessageMedia('audio/ogg; codecs=opus', base64, 'audio.ogg');
+        const sent = await withTimeout(waClient.sendMessage(chatId, media, { sendAudioAsVoice: ptt !== false }), 30000, 'sendAudio');
         res.json({ success: true, messageId: sent.id._serialized, to: chatId });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -1333,8 +1375,8 @@ app.post('/api/send/location', requireApiKey, requireReady, async (req, res) => 
     if (!to || latitude == null || longitude == null) return res.status(400).json({ success: false, error: 'Missing: to, latitude, longitude' });
     try {
         const chatId = normalizePhone(to);
-        const loc    = new Location(parseFloat(latitude), parseFloat(longitude), description || '');
-        const sent   = await withTimeout(waClient.sendMessage(chatId, loc), 30000, 'sendLocation');
+        const loc = new Location(parseFloat(latitude), parseFloat(longitude), description || '');
+        const sent = await withTimeout(waClient.sendMessage(chatId, loc), 30000, 'sendLocation');
         res.json({ success: true, messageId: sent.id._serialized, to: chatId });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
@@ -1343,8 +1385,10 @@ app.get('/api/chats', requireApiKey, requireReady, async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit || '50', 10), 200), offset = parseInt(req.query.offset || '0', 10);
     try {
         const chats = await waClient.getChats(), page = chats.slice(offset, offset + limit);
-        res.json({ success: true, total: chats.length, limit, offset,
-                   chats: page.map(c => ({ id: c.id._serialized, name: c.name, isGroup: c.isGroup, unreadCount: c.unreadCount, timestamp: c.timestamp })) });
+        res.json({
+            success: true, total: chats.length, limit, offset,
+            chats: page.map(c => ({ id: c.id._serialized, name: c.name, isGroup: c.isGroup, unreadCount: c.unreadCount, timestamp: c.timestamp }))
+        });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
@@ -1352,16 +1396,20 @@ app.get('/api/contacts', requireApiKey, requireReady, async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit || '100', 10), 500), offset = parseInt(req.query.offset || '0', 10);
     try {
         const contacts = await waClient.getContacts(), page = contacts.slice(offset, offset + limit);
-        res.json({ success: true, total: contacts.length, limit, offset,
-                   contacts: page.map(c => ({ id: c.id._serialized, name: c.name || c.pushname || '', number: c.number, isMyContact: c.isMyContact })) });
+        res.json({
+            success: true, total: contacts.length, limit, offset,
+            contacts: page.map(c => ({ id: c.id._serialized, name: c.name || c.pushname || '', number: c.number, isMyContact: c.isMyContact }))
+        });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
 app.get('/api/groups', requireApiKey, requireReady, async (req, res) => {
     try {
         const chats = await waClient.getChats(), groups = chats.filter(c => c.isGroup);
-        res.json({ success: true, count: groups.length,
-                   groups: groups.map(g => ({ id: g.id._serialized, name: g.name, participantCount: g.participants ? g.participants.length : 0 })) });
+        res.json({
+            success: true, count: groups.length,
+            groups: groups.map(g => ({ id: g.id._serialized, name: g.name, participantCount: g.participants ? g.participants.length : 0 }))
+        });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
@@ -1387,8 +1435,8 @@ app.get('/dashboard', async (req, res) => {
 
     // Key is valid — render the dashboard
     try {
-        const sheet  = await getSheet();
-        const rekap  = await generateRekapBulanan(sheet, validation.bulan);
+        const sheet = await getSheet();
+        const rekap = await generateRekapBulanan(sheet, validation.bulan);
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.setHeader('Cache-Control', 'no-store');
         res.send(renderDashboard(rekap, validation.bulan, rekap.txRaw));
@@ -1410,26 +1458,26 @@ async function start() {
     if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
 
     try {
-        fs.mkdirSync(DATA_PATH,       { recursive: true });
+        fs.mkdirSync(DATA_PATH, { recursive: true });
         fs.mkdirSync(CHROME_DATA_DIR, { recursive: true });
         clearLocalCache();
 
         console.log('Connecting to MongoDB...');
-        if (mongoose.connection.readyState !== 0) await mongoose.connection.close().catch(() => {});
+        if (mongoose.connection.readyState !== 0) await mongoose.connection.close().catch(() => { });
         await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 15000 });
         console.log('MongoDB connected');
 
-        const store        = createFixedStore(mongoose);
+        const store = createFixedStore(mongoose);
         const sessionExists = await store.sessionExists({ session: SESSION_DIR_NAME });
-        let validSession   = false;
+        let validSession = false;
 
         if (sessionExists) {
-            const col  = mongoose.connection.db.collection('whatsapp-' + SESSION_DIR_NAME + '.files');
+            const col = mongoose.connection.db.collection('whatsapp-' + SESSION_DIR_NAME + '.files');
             const files = await col.find({ filename: { $regex: '^' + SESSION_DIR_NAME + '\\.zip\\.' } }).toArray();
             const slots = files.sort((a, b) => b.uploadDate - a.uploadDate);
-            const best  = slots.find(f => f.length >= 1000);
+            const best = slots.find(f => f.length >= 1000);
             if (!best) { console.warn('All slots corrupted — rescanning QR'); await store.delete({ session: SESSION_DIR_NAME }); }
-            else        { console.log('Session found: ' + slots.length + ' slot(s), best: ' + (best.length / 1024).toFixed(1) + ' KB'); validSession = true; }
+            else { console.log('Session found: ' + slots.length + ' slot(s), best: ' + (best.length / 1024).toFixed(1) + ' KB'); validSession = true; }
         } else {
             console.log('No session in MongoDB — QR scan required');
         }
@@ -1490,8 +1538,10 @@ async function start() {
         });
 
         client.on('message_reaction', reaction => {
-            fireWebhook({ event: 'reaction', timestamp: Date.now(),
-                          reaction: { id: reaction.id._serialized, from: reaction.senderId, emoji: reaction.reaction, messageId: reaction.msgId._serialized } });
+            fireWebhook({
+                event: 'reaction', timestamp: Date.now(),
+                reaction: { id: reaction.id._serialized, from: reaction.senderId, emoji: reaction.reaction, messageId: reaction.msgId._serialized }
+            });
         });
 
         console.log('Initializing WhatsApp client...');
@@ -1508,8 +1558,8 @@ async function scheduleRestart(ms) {
     console.log('Restarting in ' + ms / 1000 + 's...');
     waClient = null; isStarting = false;
     if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
-    if (currentClient) { try { await currentClient.destroy(); } catch (e) {} currentClient = null; }
-    try { await mongoose.connection.close(); } catch (e) {}
+    if (currentClient) { try { await currentClient.destroy(); } catch (e) { } currentClient = null; }
+    try { await mongoose.connection.close(); } catch (e) { }
     setTimeout(start, ms);
 }
 
@@ -1530,21 +1580,21 @@ const WARN_IGNORABLE = [
 ];
 function classifyError(err) {
     if (SILENT_IGNORABLE.some(fn => fn(err))) return 'silent';
-    if (WARN_IGNORABLE.some(fn => fn(err)))   return 'warn';
+    if (WARN_IGNORABLE.some(fn => fn(err))) return 'warn';
     return 'fatal';
 }
 process.on('uncaughtException', err => {
     const lv = classifyError(err);
     if (lv === 'silent') return;
-    if (lv === 'warn')   { console.warn('Ignored uncaughtException: ' + err.message); return; }
+    if (lv === 'warn') { console.warn('Ignored uncaughtException: ' + err.message); return; }
     console.error('uncaughtException: ' + err.message);
     if (!isReady) scheduleRestart(10000);
 });
 process.on('unhandledRejection', reason => {
     const err = reason instanceof Error ? reason : new Error(String(reason));
-    const lv  = classifyError(err);
+    const lv = classifyError(err);
     if (lv === 'silent') return;
-    if (lv === 'warn')   { console.warn('Ignored unhandledRejection: ' + err.message); return; }
+    if (lv === 'warn') { console.warn('Ignored unhandledRejection: ' + err.message); return; }
     console.error('unhandledRejection: ' + err.message);
     if (!isReady) scheduleRestart(10000);
 });
