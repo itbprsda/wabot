@@ -521,18 +521,27 @@ let isProcessingQueue = false;
 async function processQueue() {
     if (isProcessingQueue || messageQueue.length === 0) return;
     isProcessingQueue = true;
-    while (messageQueue.length > 0) {
-        const { target, content, options, resolve, reject } = messageQueue.shift();
-        try {
-            const result = await target.reply(content, options);
-            resolve(result);
-        } catch (e) {
-            reject(e);
+    console.log('[Queue] Processing started. Queue length: ' + messageQueue.length);
+    try {
+        while (messageQueue.length > 0) {
+            const { target, content, options, resolve, reject } = messageQueue.shift();
+            try {
+                const result = await target.reply(content, options);
+                resolve(result);
+            } catch (e) {
+                console.error('[Queue] Reply failed: ' + e.message);
+                reject(e);
+            }
+            // Wait at least 2 seconds between outgoing messages globally
+            if (messageQueue.length > 0) {
+                console.log('[Queue] Waiting 2s before next message...');
+                await new Promise(r => setTimeout(r, 2000));
+            }
         }
-        // Wait at least 2 seconds between outgoing messages globally
-        if (messageQueue.length > 0) await new Promise(r => setTimeout(r, 2000));
+    } finally {
+        isProcessingQueue = false;
+        console.log('[Queue] Processing finished.');
     }
-    isProcessingQueue = false;
 }
 
 function queuedReply(msg, content, options) {
