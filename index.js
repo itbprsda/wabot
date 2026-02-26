@@ -514,23 +514,62 @@ setInterval(() => {
     rateLimitMap.forEach((ts, id) => { if (ts < cutoff) rateLimitMap.delete(id); });
 }, 60000);
 
+// ─── GLOBAL MESSAGE QUEUE ─────────────────────────────────────────────────────
+const messageQueue = [];
+let isProcessingQueue = false;
+
+async function processQueue() {
+    if (isProcessingQueue || messageQueue.length === 0) return;
+    isProcessingQueue = true;
+    while (messageQueue.length > 0) {
+        const { target, content, options, resolve, reject } = messageQueue.shift();
+        try {
+            const result = await target.reply(content, options);
+            resolve(result);
+        } catch (e) {
+            reject(e);
+        }
+        // Wait at least 2 seconds between outgoing messages globally
+        if (messageQueue.length > 0) await new Promise(r => setTimeout(r, 2000));
+    }
+    isProcessingQueue = false;
+}
+
+function queuedReply(msg, content, options) {
+    return new Promise((resolve, reject) => {
+        messageQueue.push({ target: msg, content, options, resolve, reject });
+        processQueue();
+    });
+}
+
 // ─── PUPPETEER ────────────────────────────────────────────────────────────────
 const puppeteerArgs = IS_PROD ? [
-    '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-    '--disable-gpu', '--disable-accelerated-2d-canvas', '--no-first-run',
-    '--user-data-dir=' + CHROME_DATA_DIR, '--renderer-process-limit=2',
-    '--ignore-certificate-errors', '--ignore-certificate-errors-spki-list',
-    '--ignore-ssl-errors',
-    '--disable-features=CertificateTransparencyEnforcement,IsolateOrigins,site-per-process',
-    '--disable-extensions', '--disable-default-apps', '--disable-sync',
-    '--disable-translate', '--disable-web-security', '--allow-running-insecure-content',
-    '--metrics-recording-only', '--mute-audio', '--safebrowsing-disable-auto-update',
-    '--disable-breakpad', '--crash-dumps-dir=/tmp/chrome-crashes',
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--no-first-run',
+    '--renderer-process-limit=2',
+    '--disable-extensions',
+    '--disable-default-apps',
+    '--disable-sync',
+    '--disable-translate',
+    '--mute-audio',
+    '--safebrowsing-disable-auto-update',
+    '--disable-breakpad',
+    '--crash-dumps-dir=/tmp/chrome-crashes',
+    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
 ] : ['--no-sandbox', '--disable-setuid-sandbox'];
 
 const puppeteerConfig = IS_PROD
-    ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH, headless: true, args: puppeteerArgs, timeout: 120000, protocolTimeout: 120000 }
-    : { headless: true, args: puppeteerArgs, timeout: 60000 };
+    ? {
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+        headless: 'new',
+        args: puppeteerArgs,
+        timeout: 120000,
+        protocolTimeout: 120000
+    }
+    : { headless: 'new', args: puppeteerArgs, timeout: 60000 };
 
 // ─── EXPRESS ──────────────────────────────────────────────────────────────────
 const app = express();
@@ -1170,9 +1209,9 @@ async function handleFinanceMessage(msg) {
     const senderId = msg.from;
     if (isRateLimited(senderId)) { console.log('Rate limited: ' + senderId); return; }
 
-    if (msg.body === '!ping') { await msg.reply('pong!').catch(e => console.error('Reply: ' + e.message)); return; }
+    if (msg.body === '!ping') { await queuedReply(msg, 'pong!').catch(e => console.error('Reply: ' + e.message)); return; }
     if (msg.body === '!status') {
-        await msg.reply(
+        await queuedReply(msg,
             '╔════════════════════╗\n' +
             '  🤖  *BOT STATUS*\n' +
             '╚════════════════════╝\n\n' +
@@ -1208,7 +1247,7 @@ async function handleFinanceMessage(msg) {
     }
 
     if (data.error === true) {
-        await msg.reply('Maaf, AI tidak bisa memproses pesanmu. Coba lagi sebentar.')
+        await queuedReply(msg, 'Maaf, AI tidak bisa memproses pesanmu. Coba lagi sebentar.')
             .catch(e => console.error('Reply: ' + e.message));
         return;
     }
@@ -1220,7 +1259,7 @@ async function handleFinanceMessage(msg) {
     let sheet;
     try { sheet = await getSheet(); }
     catch (err) {
-        await msg.reply('Tidak bisa akses spreadsheet: ' + err.message).catch(e => console.error('Reply: ' + e.message));
+        await queuedReply(msg, 'Tidak bisa akses spreadsheet: ' + err.message).catch(e => console.error('Reply: ' + e.message));
         return;
     }
 
@@ -1264,12 +1303,12 @@ async function handleFinanceMessage(msg) {
                 }
             }
 
-            await msg.reply(teks).catch(e => console.error('Reply: ' + e.message));
+            await queuedReply(msg, teks).catch(e => console.error('Reply: ' + e.message));
             console.log('Sent monthly report');
             designSheet(bulanCari).catch(e => console.error('designSheet: ' + e.message));
         } catch (err) {
             console.error('Rekap error: ' + err.message);
-            await msg.reply('Gagal mengambil rekap: ' + err.message).catch(e => console.error('Reply: ' + e.message));
+            await queuedReply(msg, 'Gagal mengambil rekap: ' + err.message).catch(e => console.error('Reply: ' + e.message));
         }
         return;
     }
@@ -1281,7 +1320,7 @@ async function handleFinanceMessage(msg) {
             const r2 = await hitungSaldo(sheet, tglCari);
             const judulStr = tglCari ? '📅  Saldo ' + tglCari : '💼  Saldo Saat Ini';
             const saldoSign = r2.saldo >= 0 ? '✅' : '⚠️';
-            await msg.reply(
+            await queuedReply(msg,
                 '╔════════════════════╗\n' +
                 '  ' + judulStr + '\n' +
                 '╚════════════════════╝\n\n' +
@@ -1294,7 +1333,7 @@ async function handleFinanceMessage(msg) {
                 '    *' + rupiahFmt(r2.saldo) + '*'
             ).catch(e => console.error('Reply: ' + e.message));
         } catch (err) {
-            await msg.reply('Gagal mengambil saldo: ' + err.message).catch(e => console.error('Reply: ' + e.message));
+            await queuedReply(msg, 'Gagal mengambil saldo: ' + err.message).catch(e => console.error('Reply: ' + e.message));
         }
         return;
     }
@@ -1303,7 +1342,7 @@ async function handleFinanceMessage(msg) {
     if (data.nominal !== undefined) {
         const parsedNominal = parseFloat(data.nominal);
         if (isNaN(parsedNominal) || parsedNominal <= 0) {
-            await msg.reply('Nominal tidak valid. Coba lagi dengan nominal yang jelas.').catch(e => console.error('Reply: ' + e.message));
+            await queuedReply(msg, 'Nominal tidak valid. Coba lagi dengan nominal yang jelas.').catch(e => console.error('Reply: ' + e.message));
             return;
         }
         try {
@@ -1328,7 +1367,7 @@ async function handleFinanceMessage(msg) {
             const arrow = isIn ? '📈' : '📉';
             const tipeLabel = isIn ? '🟢 Pemasukan' : '🔴 Pengeluaran';
             const saldoIcon = saldoBaru >= 0 ? '✅' : '⚠️';
-            await msg.reply(
+            await queuedReply(msg,
                 '╔════════════════════╗\n' +
                 '  ' + arrow + '  *TERCATAT*\n' +
                 '╚════════════════════╝\n\n' +
@@ -1345,7 +1384,7 @@ async function handleFinanceMessage(msg) {
             designSheet(nowMonth).catch(e => console.error('designSheet: ' + e.message));
         } catch (err) {
             console.error('Transaction save error: ' + err.message);
-            await msg.reply('Gagal menyimpan transaksi: ' + err.message).catch(e => console.error('Reply: ' + e.message));
+            await queuedReply(msg, 'Gagal menyimpan transaksi: ' + err.message).catch(e => console.error('Reply: ' + e.message));
         }
         return;
     }
@@ -1572,8 +1611,18 @@ async function start() {
         }
 
         const client = new Client({
-            authStrategy: new RemoteAuth({ clientId: SESSION_NAME, dataPath: DATA_PATH, store, backupSyncIntervalMs: BACKUP_INTERVAL }),
-            puppeteer: puppeteerConfig, authTimeoutMs: 120000,
+            authStrategy: new RemoteAuth({
+                clientId: SESSION_NAME,
+                dataPath: DATA_PATH,
+                store,
+                backupSyncIntervalMs: BACKUP_INTERVAL
+            }),
+            puppeteer: puppeteerConfig,
+            authTimeoutMs: 180000,
+            webVersionCache: {
+                type: 'remote',
+                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+            }
         });
         currentClient = client;
 
@@ -1621,7 +1670,7 @@ async function start() {
             try { await handleFinanceMessage(msg); }
             catch (err) {
                 console.error('handleFinanceMessage error: ' + err.message);
-                await msg.reply('Terjadi kesalahan: ' + err.message).catch(e => console.error('Reply: ' + e.message));
+                await queuedReply(msg, 'Terjadi kesalahan: ' + err.message).catch(e => console.error('Reply: ' + e.message));
             }
             handleWebhookForward(msg).catch(e => console.error('webhook fwd: ' + e.message));
         });
