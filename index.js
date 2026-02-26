@@ -337,12 +337,13 @@ async function designSheet(bulanStr) {
             if (opts.bg !== undefined) cl.backgroundColor = opts.bg;
             if (opts.align !== undefined) cl.horizontalAlignment = opts.align;
             if (opts.wrap !== undefined) cl.wrapStrategy = opts.wrap ? 'WRAP' : 'CLIP';
-            const tf = {};
-            if (opts.bold !== undefined) tf.bold = opts.bold;
-            if (opts.size !== undefined) tf.fontSize = opts.size;
-            if (opts.color !== undefined) tf.foregroundColor = opts.color;
-            if (opts.italic !== undefined) tf.italic = opts.italic;
-            if (Object.keys(tf).length > 0) cl.textFormat = { ...cl.textFormat, ...tf };
+
+            // Fix: Initialize textFormat if it doesn't exist to avoid "unsaved" errors
+            if (!cl.textFormat) cl.textFormat = {};
+            if (opts.bold !== undefined) cl.textFormat.bold = opts.bold;
+            if (opts.size !== undefined) cl.textFormat.fontSize = opts.size;
+            if (opts.color !== undefined) cl.textFormat.foregroundColor = opts.color;
+            if (opts.italic !== undefined) cl.textFormat.italic = opts.italic;
         }
 
         // Clear all
@@ -526,7 +527,8 @@ async function processQueue() {
         while (messageQueue.length > 0) {
             const { target, content, options, resolve, reject } = messageQueue.shift();
             try {
-                const result = await target.reply(content, options);
+                // Add a timeout to the reply itself to prevent the queue from hanging
+                const result = await withTimeout(target.reply(content, options), 30000, 'Queue Reply');
                 resolve(result);
             } catch (e) {
                 console.error('[Queue] Reply failed: ' + e.message);
@@ -1216,6 +1218,7 @@ function createFixedStore(mongooseInstance) {
 // ─── FINANCE MESSAGE HANDLER ─────────────────────────────────────────────────
 async function handleFinanceMessage(msg) {
     const senderId = msg.from;
+    console.log('[Handler] Received message from ' + senderId + ': ' + msg.body.slice(0, 40));
     if (isRateLimited(senderId)) { console.log('Rate limited: ' + senderId); return; }
 
     if (msg.body === '!ping') { await queuedReply(msg, 'pong!').catch(e => console.error('Reply: ' + e.message)); return; }
@@ -1399,6 +1402,7 @@ async function handleFinanceMessage(msg) {
     }
 
     console.warn('Unrecognised AI response: ' + JSON.stringify(data));
+    console.log('[Handler] Finished processing message from ' + senderId);
 }
 
 async function handleWebhookForward(msg) {
