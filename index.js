@@ -383,11 +383,14 @@ async function designSheet(userDoc, bulanStr, userFilter) {
             if (opts.align !== undefined) cl.horizontalAlignment = opts.align;
             if (opts.wrap !== undefined) cl.wrapStrategy = opts.wrap ? 'WRAP' : 'CLIP';
 
-            if (!cl.textFormat) cl.textFormat = {};
-            if (opts.bold !== undefined) cl.textFormat.bold = opts.bold;
-            if (opts.size !== undefined) cl.textFormat.fontSize = opts.size;
-            if (opts.color !== undefined) cl.textFormat.foregroundColor = opts.color;
-            if (opts.italic !== undefined) cl.textFormat.italic = opts.italic;
+            if (opts.bold !== undefined || opts.size !== undefined || opts.color !== undefined || opts.italic !== undefined) {
+                cl.textFormat = {
+                    bold: opts.bold !== undefined ? opts.bold : false,
+                    fontSize: opts.size !== undefined ? opts.size : 10,
+                    foregroundColor: opts.color !== undefined ? opts.color : WHITE,
+                    italic: opts.italic !== undefined ? opts.italic : false,
+                };
+            }
         }
 
         for (let r = 0; r < totalRows; r++)
