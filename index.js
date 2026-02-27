@@ -582,8 +582,6 @@ const puppeteerArgs = IS_PROD ? [
     '--disable-gpu',
     '--no-first-run',
     '--no-zygote',
-    '--single-process',
-    '--renderer-process-limit=1',
     '--disable-extensions',
     '--disable-default-apps',
     '--disable-sync',
@@ -1505,7 +1503,7 @@ async function start() {
             authTimeoutMs: 300000,
             webVersionCache: {
                 type: 'remote',
-                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1014711009-alpha.html',
+                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
             }
         });
         currentClient = client;
@@ -1556,6 +1554,11 @@ async function start() {
             authCount = 0;
             if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
             console.warn('Disconnected: ' + reason); scheduleRestart(10000);
+        });
+
+        client.on('change_state', state => {
+            console.log('WA State Change: ' + state);
+            if (state === 'CONNECTED') botStatus = 'ready';
         });
 
         client.on('message', async msg => {
@@ -1621,6 +1624,8 @@ const WARN_IGNORABLE = [
     e => e && e.message && e.message.includes('Cannot use a session that has ended'),
     e => e && e.message && e.message.includes('connection from closed connection pool'),
     e => e && e.message && e.message.includes('Topology is closed'),
+    e => e && e.message && e.message.includes('Execution context was destroyed'),
+    e => e && e.message && e.message.includes('Runtime.callFunctionOn'),
 ];
 function classifyError(err) {
     if (SILENT_IGNORABLE.some(fn => fn(err))) return 'silent';
