@@ -83,7 +83,13 @@ console.log('Port         : ' + PORT);
 console.log('Allowed Chats: ' + (ALLOWED_CHATS.length > 0 ? ALLOWED_CHATS.join(', ') : 'All'));
 console.log('Admins       : ' + (ADMINISTRATOR.length > 0 ? ADMINISTRATOR.join(', ') : 'None'));
 
-// (Google Sheets are now handled dynamically per-user)
+// ─── GOOGLE SHEETS AUTH ───────────────────────────────────────────────────────
+const serviceAccountAuth = new JWT({
+    email: creds.client_email,
+    key: creds.private_key,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+});
+// (Google Sheets are now handled dynamically per-user using getSheet(id))
 
 // ─── AI CLIENTS ───────────────────────────────────────────────────────────────
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
