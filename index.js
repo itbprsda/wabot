@@ -971,9 +971,18 @@ function createFixedStore(mongooseInstance) {
     }
     return {
         async sessionExists(options) {
+            console.log('[DEBUG] store.sessionExists started');
             const sn = path.basename(options.session);
+            if (!mongooseInstance.connection || !mongooseInstance.connection.db) {
+                console.error('[DEBUG] sessionExists failed: mongoose connection or db is null');
+                return false;
+            }
+            console.log('[DEBUG] sessionExists accessing collection: whatsapp-' + sn + '.files');
             const col = mongooseInstance.connection.db.collection('whatsapp-' + sn + '.files');
-            return await col.countDocuments({ filename: { $regex: '^' + sn + '\\.zip\\.' } }, { limit: 1 }) > 0;
+            console.log('[DEBUG] sessionExists counting documents...');
+            const count = await col.countDocuments({ filename: { $regex: '^' + sn + '\\.zip\\.' } }, { limit: 1 });
+            console.log('[DEBUG] sessionExists count result: ' + count);
+            return count > 0;
         },
         async save(options) {
             const sn = path.basename(options.session);
@@ -994,23 +1003,24 @@ function createFixedStore(mongooseInstance) {
             try { fs.unlinkSync(zipPath); } catch (e) { if (e.code !== 'ENOENT') console.warn('unlink: ' + e.message); }
         },
         async extract(options) {
+            console.log('[DEBUG] store.extract started');
             const sn = path.basename(options.session);
             const zipPath = options.path;
             const bucket = getBucket(sn);
             const all = await bucket.find({}).toArray();
-            const slots = all.filter(d => d.filename.startsWith(sn + '.zip.')).sort((a, b) => b.uploadDate - a.uploadDate);
+            const slots = all.filter(d => d.filename.startsWith(sn + '.zip.')).sort((a, b) => a.uploadDate - b.uploadDate);
             if (!slots.length) throw new Error('No backup slots in MongoDB');
             for (let i = 0; i < slots.length; i++) {
                 const slot = slots[i];
                 if (slot.length < 1000) { console.warn('Slot ' + (i + 1) + ' too small'); continue; }
                 try {
-                    console.log(`Downloading session slot ${i + 1}: ${slot.filename} (${(slot.length / 1024).toFixed(1)} KB)...`);
+                    console.log(`[DEBUG] Downloading session slot ${i + 1}: ${slot.filename} (${(slot.length / 1024).toFixed(1)} KB)...`);
                     await new Promise((resolve, reject) => {
                         bucket.openDownloadStreamByName(slot.filename).pipe(fs.createWriteStream(zipPath)).on('error', reject).on('close', resolve);
                     });
                     const dl = fs.existsSync(zipPath) ? fs.statSync(zipPath).size : 0;
                     if (dl < 1000) { console.warn('Slot ' + (i + 1) + ' empty'); continue; }
-                    console.log('Restored from slot ' + (i + 1) + ': ' + (dl / 1024).toFixed(1) + ' KB'); return;
+                    console.log('[DEBUG] Restored from slot ' + (i + 1) + ': ' + (dl / 1024).toFixed(1) + ' KB'); return;
                 } catch (err) { console.warn('Slot ' + (i + 1) + ' failed: ' + err.message); }
             }
             throw new Error('All backup slots failed');
@@ -1463,12 +1473,19 @@ async function start() {
         console.log('MongoDB connected');
 
         const store = createFixedStore(mongoose);
-        const sessionExists = await store.sessionExists({ session: SESSION_DIR_NAME });
+        console.log('[DEBUG] Checking sessionExists...');
+        const sessionExists = await withTimeout(store.sessionExists({ session: SESSION_DIR_NAME }), 20000, 'sessionExists').catch(e => {
+            console.error('[DEBUG] sessionExists timeout or error: ' + e.message);
+            return false;
+        });
+        console.log('[DEBUG] sessionExists result: ' + sessionExists);
         let validSession = false;
 
         if (sessionExists) {
+            console.log('[DEBUG] Fetching files list from MongoDB...');
             const col = mongoose.connection.db.collection('whatsapp-' + SESSION_DIR_NAME + '.files');
             const files = await col.find({ filename: { $regex: '^' + SESSION_DIR_NAME + '\\.zip\\.' } }).toArray();
+            console.log('[DEBUG] Files found: ' + files.length);
             const slots = files.sort((a, b) => b.uploadDate - a.uploadDate);
             const best = slots.find(f => f.length >= 1000);
             if (!best) { console.warn('All slots corrupted — rescanning QR'); await store.delete({ session: SESSION_DIR_NAME }); }
