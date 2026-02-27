@@ -581,7 +581,9 @@ const puppeteerArgs = IS_PROD ? [
     '--disable-dev-shm-usage',
     '--disable-gpu',
     '--no-first-run',
-    '--renderer-process-limit=2',
+    '--no-zygote',
+    '--single-process',
+    '--renderer-process-limit=1',
     '--disable-extensions',
     '--disable-default-apps',
     '--disable-sync',
@@ -590,7 +592,7 @@ const puppeteerArgs = IS_PROD ? [
     '--safebrowsing-disable-auto-update',
     '--disable-breakpad',
     '--crash-dumps-dir=/tmp/chrome-crashes',
-    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 ] : ['--no-sandbox', '--disable-setuid-sandbox'];
 
 const puppeteerConfig = IS_PROD
@@ -1000,6 +1002,7 @@ function createFixedStore(mongooseInstance) {
                 const slot = slots[i];
                 if (slot.length < 1000) { console.warn('Slot ' + (i + 1) + ' too small'); continue; }
                 try {
+                    console.log(`Downloading session slot ${i + 1}: ${slot.filename} (${(slot.length / 1024).toFixed(1)} KB)...`);
                     await new Promise((resolve, reject) => {
                         bucket.openDownloadStreamByName(slot.filename).pipe(fs.createWriteStream(zipPath)).on('error', reject).on('close', resolve);
                     });
@@ -1482,10 +1485,10 @@ async function start() {
                 backupSyncIntervalMs: BACKUP_INTERVAL
             }),
             puppeteer: puppeteerConfig,
-            authTimeoutMs: 180000,
+            authTimeoutMs: 300000,
             webVersionCache: {
                 type: 'remote',
-                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1014711009-alpha.html',
             }
         });
         currentClient = client;
@@ -1493,6 +1496,7 @@ async function start() {
         client.on('loading_screen', (pct, msg) => console.log('Loading: ' + pct + '% - ' + msg));
 
         client.on('qr', qr => {
+            if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; } // QR means it's not "stuck"
             botStatus = 'qr_ready'; qrData = qr;
             if (validSession) console.warn('Session restore failed — scan fresh QR');
             console.log('\n--- Scan QR: open the web UI or hit /api/qr ---\n');
@@ -1546,9 +1550,21 @@ async function start() {
             });
         });
 
-        console.log('Initializing WhatsApp client...');
+        console.log('Initializing WhatsApp client (Puppeteer)...');
         botStatus = 'starting';
+
+        // START GLOBAL STARTUP WATCHDOG
+        // If neither 'ready' nor 'qr' is emitted within 5 minutes, something is wrong.
+        if (readyWatchdog) clearTimeout(readyWatchdog);
+        readyWatchdog = setTimeout(() => {
+            if (!isReady && botStatus !== 'qr_ready') {
+                console.error('CRITICAL: Bot stuck in starting/initialization for 5min! Restarting...');
+                scheduleRestart(5000);
+            }
+        }, 5 * 60 * 1000);
+
         await client.initialize();
+        console.log('client.initialize() promise resolved.');
 
     } catch (err) {
         console.error('Startup error: ' + err.message);
