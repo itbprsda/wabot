@@ -619,6 +619,7 @@ let isReady = false;
 let qrData = null;
 let currentClient = null;
 let readyWatchdog = null;
+let authCount = 0;
 const startTime = Date.now();
 
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
@@ -1451,6 +1452,7 @@ async function start() {
     if (isStarting) { console.warn('start() already running'); return; }
     isStarting = true; isReady = false; qrData = null;
     if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
+    authCount = 0;
 
     try {
         fs.mkdirSync(DATA_PATH, { recursive: true });
@@ -1504,13 +1506,21 @@ async function start() {
         });
 
         client.on('authenticated', () => {
-            if (!isReady) {
+            authCount++;
+            console.log(`Authenticated! (Count: ${authCount})`);
+
+            if (authCount >= 2 && !isReady) {
+                console.warn('Multiple authentication hits detected — forcing ready status');
+                if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
+                botStatus = 'ready'; waClient = client;
+                isReady = true; console.log('Bot is ready! (Forced)');
+            } else if (!isReady) {
                 botStatus = 'authenticated';
                 readyWatchdog = setTimeout(() => {
                     if (!isReady) { console.error('Watchdog: never ready after 3min — restarting'); scheduleRestart(5000); }
                 }, 3 * 60 * 1000);
             }
-            qrData = null; console.log('Authenticated!');
+            qrData = null;
         });
 
         client.on('auth_failure', msg => { botStatus = 'disconnected'; qrData = null; console.error('Auth failed: ' + msg); scheduleRestart(10000); });
@@ -1528,6 +1538,7 @@ async function start() {
 
         client.on('disconnected', reason => {
             botStatus = 'disconnected'; waClient = null; isReady = false; isStarting = false;
+            authCount = 0;
             if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
             console.warn('Disconnected: ' + reason); scheduleRestart(10000);
         });
