@@ -195,7 +195,7 @@ async function createDashboardKey(from, bulan) {
     return key;
 }
 
-// Returns: { valid: true, bulan, from } | { valid: false, reason: 'not_found'|'used'|'expired' }
+// Returns: { valid: true, bulan, from, createdAt } | { valid: false, reason: 'not_found'|'used'|'expired' }
 async function validateDashboardKey(key) {
     const DashboardAccess = getDashboardAccessModel();
     // Find the single row and match by key
@@ -221,18 +221,18 @@ async function validateDashboardKey(key) {
 
     // Valid — record the access time
     await DashboardAccess.updateOne({ key }, { $set: { lastAccess: now } });
-    return { valid: true, bulan: record.bulan, from: record.from };
+    return { valid: true, bulan: record.bulan, from: record.from, createdAt: record.createdAt };
 }
 
 async function getUserSettings(from) {
     const UserSettings = getUserSettingsModel();
-    let settings = await UserSettings.findOne({ from });
+    let settings = await withTimeout(UserSettings.findOne({ from }), 10000, 'getUserSettings findOne');
 
     // Fallback/Migration: if this is a known primary user and no settings in DB, use ENV
     if (!settings && ALLOWED_CHATS.includes(from)) {
         const spreadsheetId = process.env.SPREADSHEET_ID;
         if (spreadsheetId) {
-            settings = await UserSettings.create({ from, spreadsheetId });
+            settings = await withTimeout(UserSettings.create({ from, spreadsheetId }), 10000, 'getUserSettings create');
             console.log(`Migrated SPREADSHEET_ID to MongoDB for user: ${from}`);
         }
     }
@@ -502,14 +502,18 @@ PENTING: Hanya balas dengan JSON murni. Jangan ada penjelasan tambahan.`;
 async function parseWithHuggingFace(message, retries) {
     retries = retries === undefined ? 2 : retries;
     try {
-        const response = await inference.chatCompletion({
-            model: 'Qwen/Qwen2.5-7B-Instruct',
-            messages: [
-                { role: 'system', content: AI_SYSTEM_PROMPT },
-                { role: 'user', content: message },
-            ],
-            max_tokens: 150, temperature: 0.1,
-        });
+        const response = await withTimeout(
+            inference.chatCompletion({
+                model: 'Qwen/Qwen2.5-7B-Instruct',
+                messages: [
+                    { role: 'system', content: AI_SYSTEM_PROMPT },
+                    { role: 'user', content: message },
+                ],
+                max_tokens: 150, temperature: 0.1,
+            }),
+            20000,
+            'HuggingFace chatCompletion'
+        );
         const resultText = response.choices[0].message.content;
         console.log('HF Response: ' + resultText);
         const jsonMatch = resultText.match(/\{.*\}/s);
@@ -1450,8 +1454,13 @@ app.get('/dashboard', async (req, res) => {
         const { sheet, doc: userDoc } = await getSheet(settings.spreadsheetId);
         const rekap = await generateRekapBulanan(sheet, bulan, from);
 
-        // Always update headers and formatting on view
-        designSheet(userDoc, bulan, from).catch(e => console.error('Dashboard designSheet error: ' + e.message));
+        // Only re-run designSheet if the key is older than 90s (message handler already ran it fresh)
+        const keyAgeSec = (Date.now() - new Date(validation.createdAt).getTime()) / 1000;
+        if (keyAgeSec > 90) {
+            designSheet(userDoc, bulan, from).catch(e => console.error('Dashboard designSheet error: ' + e.message));
+        } else {
+            console.log('[Dashboard] Skipping designSheet — ran recently (' + keyAgeSec.toFixed(0) + 's ago)');
+        }
 
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.setHeader('Cache-Control', 'no-store');
@@ -1623,8 +1632,12 @@ async function start() {
         });
 
         client.on('message', async msg => {
+            console.log('[MSG] Arrived from: ' + msg.from + ' | body: ' + (msg.body || '').slice(0, 50));
             if (msg.from === 'status@broadcast') return;
-            if (ALLOWED_CHATS.length > 0 && !ALLOWED_CHATS.includes(msg.from)) return;
+            if (ALLOWED_CHATS.length > 0 && !ALLOWED_CHATS.includes(msg.from)) {
+                console.log('[MSG] Filtered (not in ALLOWED_CHATS): ' + msg.from);
+                return;
+            }
             try { await handleFinanceMessage(msg); }
             catch (err) {
                 console.error('handleFinanceMessage error: ' + err.message);
