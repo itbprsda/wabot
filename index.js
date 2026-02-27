@@ -641,6 +641,7 @@ function renderStatusPage() {
         starting: { icon: '◌', badge: 'Memulai...', hint: 'Bot sedang diinisialisasi, mohon tunggu.', color: '#60a5fa' },
         qr_ready: { icon: '▣', badge: 'Scan QR', hint: 'Buka WhatsApp → Perangkat Tertaut → Tautkan.', color: '#fbbf24' },
         authenticated: { icon: '◎', badge: 'Autentikasi...', hint: 'Sesi berhasil, memuat WhatsApp...', color: '#a78bfa' },
+        ready: { icon: '✓', badge: 'Ready', hint: 'Bot aktif dan siap digunakan!', color: '#10b981' },
         disconnected: { icon: '✕', badge: 'Terputus', hint: 'Koneksi terputus, mencoba menghubungkan ulang.', color: '#f87171' },
     };
     const st = statusMap[botStatus] || statusMap['starting'];
@@ -1282,9 +1283,6 @@ let QRCode = null;
 try { QRCode = require('qrcode'); } catch (e) { console.warn('"qrcode" not found. Run: npm install qrcode'); }
 
 app.get('/', (req, res) => {
-    if (isReady && botStatus === 'ready') {
-        return res.status(404).send(render404());
-    }
     res.send(renderStatusPage());
 });
 
