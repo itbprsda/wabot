@@ -8,10 +8,10 @@
  * Run automatically via: "postinstall" in package.json
  */
 
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
 
-const PATCH_MARKER = '// [PATCHED-WINDOWS-FINAL]';
+const PATCH_MARKER = '// [PATCHED-WINDOWS-V3]';
 
 const remoteAuthPath = path.join(
     process.cwd(),
@@ -42,7 +42,7 @@ if (content.includes(PATCH_MARKER)) {
 }
 
 // ─── Verify expected method signatures exist before patching ──────────────────
-const REQUIRED_METHODS = ['async compressSession() {', 'async deleteMetadata() {'];
+const REQUIRED_METHODS = ['async compressSession() {', 'async deleteMetadata() {', 'async storeRemoteSession(options) {'];
 for (const sig of REQUIRED_METHODS) {
     if (!content.includes(sig)) {
         console.error(`❌ Could not find "${sig}" in RemoteAuth.js.`);
@@ -166,6 +166,24 @@ const NEW_DELETE_METADATA = `async deleteMetadata() { ${PATCH_MARKER}
         }
     }`;
 
+// ─── Replacement: storeRemoteSession ──────────────────────────────────────────
+const NEW_STORE_REMOTE_SESSION = `async storeRemoteSession(options) { ${PATCH_MARKER}
+        /* Compress & Store Session */
+        const pathExists = await this.isValidPath(this.userDataDir);
+        if (pathExists) {
+            await this.compressSession();
+            await this.store.save({session: path.join(this.dataPath, this.sessionName)});
+            await fs.promises.unlink(path.join(this.dataPath, \`\${this.sessionName}.zip\`)).catch(() => {});
+            await fs.promises.rm(\`\${this.tempDir}\`, {
+                recursive: true,
+                force: true,
+                maxRetries: this.rmMaxRetries,
+            }).catch(() => {});
+            // Always emit so index.js watchdog can track it
+            this.client.emit(require('./../util/Constants').Events.REMOTE_SESSION_SAVED);
+        }
+    }`;
+
 // ─── Apply patches ────────────────────────────────────────────────────────────
 function replaceMethod(src, marker, replacement) {
     const idx = src.indexOf(marker);
@@ -177,7 +195,8 @@ function replaceMethod(src, marker, replacement) {
 
 try {
     content = replaceMethod(content, 'async compressSession() {', NEW_COMPRESS);
-    content = replaceMethod(content, 'async deleteMetadata() {',  NEW_DELETE_METADATA);
+    content = replaceMethod(content, 'async deleteMetadata() {', NEW_DELETE_METADATA);
+    content = replaceMethod(content, 'async storeRemoteSession(options) {', NEW_STORE_REMOTE_SESSION);
 } catch (err) {
     console.error(`❌ Patch failed: ${err.message}`);
     process.exit(1);
@@ -186,7 +205,8 @@ try {
 // ─── Write back ───────────────────────────────────────────────────────────────
 fs.writeFileSync(remoteAuthPath, content, 'utf8');
 
-console.log('✅ compressSession() patched — recursive safe copy, skips locked GPU files');
-console.log('✅ deleteMetadata()   patched — ENOENT-safe');
+console.log('✅ compressSession()   patched — recursive safe copy, skips locked GPU files');
+console.log('✅ deleteMetadata()     patched — ENOENT-safe');
+console.log('✅ storeRemoteSession() patched — always-emit REMOTE_SESSION_SAVED');
 console.log('');
 console.log('Next step: Delete old MongoDB sessions if any, then run: node index.js');

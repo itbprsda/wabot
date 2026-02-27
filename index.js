@@ -1028,17 +1028,37 @@ function createFixedStore(mongooseInstance) {
             if (!isReady) { console.log('Skipping MongoDB backup (bot not ready yet)'); return; }
             const size = fs.statSync(zipPath).size;
             if (size < 1000) throw new Error('Zip too small (' + size + ' bytes)');
-            console.log('Uploading: ' + sn + '.zip (' + (size / 1024).toFixed(1) + ' KB)');
-            const bucket = getBucket(sn), slotName = sn + '.zip.' + Date.now();
-            await new Promise((resolve, reject) => {
-                fs.createReadStream(zipPath).pipe(bucket.openUploadStream(slotName)).on('error', reject).on('close', resolve);
+
+            // Fix for Windows: RemoteAuth will try to unlink(zipPath) immediately after this returns.
+            // We copy it to a temporary filename so the background upload doesn't lock the original file.
+            const uploadPath = zipPath + '.uploading';
+            try {
+                fs.copyFileSync(zipPath, uploadPath);
+            } catch (e) {
+                console.error('Failed to copy session for upload: ' + e.message);
+                return;
+            }
+
+            console.log('Uploading (background): ' + sn + '.zip (' + (size / 1024).toFixed(1) + ' KB)');
+            // Fire-and-forget: return immediately so RemoteAuth's await resolves instantly,
+            // letting the message event handler continue while the upload runs in the background.
+            setImmediate(async () => {
+                try {
+                    const bucket = getBucket(sn), slotName = sn + '.zip.' + Date.now();
+                    await new Promise((resolve, reject) => {
+                        fs.createReadStream(uploadPath).pipe(bucket.openUploadStream(slotName)).on('error', reject).on('close', resolve);
+                    });
+                    const all = await bucket.find({}).toArray();
+                    const slots = all.filter(d => d.filename.startsWith(sn + '.zip.')).sort((a, b) => a.uploadDate - b.uploadDate);
+                    const toDel = slots.slice(0, Math.max(0, slots.length - MAX_BACKUPS));
+                    for (const d of toDel) await bucket.delete(d._id);
+                    console.log('MongoDB upload done @ ' + formatTime(new Date()));
+                    try { fs.unlinkSync(uploadPath); } catch (e) { if (e.code !== 'ENOENT') console.warn('unlink uploadPath: ' + e.message); }
+                } catch (err) {
+                    console.error('MongoDB upload failed: ' + err.message);
+                    try { if (fs.existsSync(uploadPath)) fs.unlinkSync(uploadPath); } catch (e) { }
+                }
             });
-            const all = await bucket.find({}).toArray();
-            const slots = all.filter(d => d.filename.startsWith(sn + '.zip.')).sort((a, b) => a.uploadDate - b.uploadDate);
-            const toDel = slots.slice(0, Math.max(0, slots.length - MAX_BACKUPS));
-            for (const d of toDel) await bucket.delete(d._id);
-            console.log('MongoDB upload done @ ' + formatTime(new Date()));
-            try { fs.unlinkSync(zipPath); } catch (e) { if (e.code !== 'ENOENT') console.warn('unlink: ' + e.message); }
         },
         async extract(options) {
             console.log('[DEBUG] store.extract started');
@@ -1506,7 +1526,11 @@ async function start() {
     isStarting = true; isReady = false; qrData = null;
     if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
     if (activeReadyCheck) { clearInterval(activeReadyCheck); activeReadyCheck = null; }
+    if (healthInterval) { clearInterval(healthInterval); healthInterval = null; }
     authCount = 0;
+
+    // Start periodic health check
+    healthInterval = setInterval(botHealthCheck, 3 * 60 * 1000);
 
     try {
         fs.mkdirSync(DATA_PATH, { recursive: true });
@@ -1643,20 +1667,33 @@ async function start() {
         client.on('remote_session_saved', () => {
             sessionSavedAt = formatTime(new Date());
             console.log('Session backed up @ ' + sessionSavedAt);
-            // After RemoteAuth saves, WA internally reloads the page.
-            // If a fresh 'ready' does NOT arrive within 90s, message listeners are dead — restart.
-            let readyAfterBackup = false;
-            const backupReadyHandler = () => { readyAfterBackup = true; };
-            client.once('ready', backupReadyHandler);
-            console.log('[PostBackup] Watchdog started — waiting for page reload...');
-            setTimeout(() => {
-                client.removeListener('ready', backupReadyHandler);
-                if (!readyAfterBackup) {
-                    console.warn('[PostBackup] No ready event 90s after backup — restarting to restore message listeners...');
-                    scheduleRestart(3000);
-                } else {
-                    console.log('[PostBackup] Page reload confirmed. All good.');
+
+            // After RemoteAuth saves, the session zip is deleted and Chrome might reload.
+            // We start a watchdog to ensure message parsing is still alive.
+            if (activeReadyCheck) { clearInterval(activeReadyCheck); activeReadyCheck = null; }
+
+            let confirmed = false;
+            const confirm = () => { confirmed = true; console.log('[PostBackup] Heartbeat confirmed.'); };
+            client.once('ready', confirm);
+
+            console.log('[PostBackup] Watchdog started — waiting for heartbeat/reload...');
+            setTimeout(async () => {
+                client.removeListener('ready', confirm);
+                if (confirmed) return;
+
+                // Try a manual ping to see if the internal client is still alive
+                try {
+                    const state = await withTimeout(client.getState(), 10000, 'PostBackup Ping');
+                    if (state === 'CONNECTED') {
+                        console.log('[PostBackup] Client still CONNECTED, skipping restart.');
+                        return;
+                    }
+                } catch (e) {
+                    console.warn('[PostBackup] Ping failed: ' + e.message);
                 }
+
+                console.error('[PostBackup] Bot stalled after backup — restarting to restore message listeners...');
+                scheduleRestart(5000);
             }, 90000);
         });
 
@@ -1717,11 +1754,31 @@ async function start() {
     }
 }
 
+let healthInterval = null;
+async function botHealthCheck() {
+    if (!isReady || !waClient) return;
+    try {
+        // Simple non-blocking check to ensure internal state is active
+        const state = await withTimeout(waClient.getState(), 15000, 'HealthCheck State');
+        if (state !== 'CONNECTED') {
+            console.warn('[Health] WA State is ' + state + ' — waiting for reconnection...');
+        }
+    } catch (e) {
+        console.error('[Health] Bot unresponsive: ' + e.message);
+        // If it timed out, something is likely hung.
+        if (e.message.includes('timed out')) {
+            console.error('[Health] CRITICAL: Bot hung / Puppeteer unresponsive — restarting...');
+            scheduleRestart(5000);
+        }
+    }
+}
+
 async function scheduleRestart(ms) {
     console.log('Restarting in ' + ms / 1000 + 's...');
-    waClient = null; isStarting = false;
+    waClient = null; isStarting = false; isReady = false;
     if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
     if (activeReadyCheck) { clearInterval(activeReadyCheck); activeReadyCheck = null; }
+    if (healthInterval) { clearInterval(healthInterval); healthInterval = null; }
     if (currentClient) { try { await currentClient.destroy(); } catch (e) { } currentClient = null; }
     try { await mongoose.connection.close(); } catch (e) { }
     setTimeout(start, ms);
