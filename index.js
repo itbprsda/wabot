@@ -12,7 +12,6 @@ const https = require('https');
 const http = require('http');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { HfInference } = require('@huggingface/inference');
 const crypto = require('crypto');
 
@@ -62,7 +61,7 @@ const IS_PROD = !!process.env.PUPPETEER_EXECUTABLE_PATH;
 
 const MAX_MEDIA_WEBHOOK_BYTES = 5 * 1024 * 1024;
 const MAX_WEBHOOK_ATTEMPTS = 3;
-const BACKUP_INTERVAL = IS_PROD ? 5 * 60 * 1000 : 60 * 1000;
+const BACKUP_INTERVAL = IS_PROD ? 30 * 60 * 1000 : 5 * 60 * 1000;
 
 // Dashboard key expiry: 5 minutes (300,000 ms)
 const DASHBOARD_KEY_EXPIRY_MS = 5 * 60 * 1000;
@@ -92,8 +91,6 @@ const serviceAccountAuth = new JWT({
 // (Google Sheets are now handled dynamically per-user using getSheet(id))
 
 // ─── AI CLIENTS ───────────────────────────────────────────────────────────────
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-latest' });
 const inference = new HfInference(HF_TOKEN);
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -244,10 +241,10 @@ const REQUIRED_HEADERS = ['Tanggal', 'Deskripsi', 'Nominal', 'Tipe', 'User', 'Sa
 
 async function getSheet(spreadsheetId) {
     const userDoc = new GoogleSpreadsheet(spreadsheetId, serviceAccountAuth);
-    await userDoc.loadInfo();
+    await withTimeout(userDoc.loadInfo(), 20000, 'getSheet loadInfo');
     const sheet = userDoc.sheetsByIndex[0];
     try {
-        await sheet.loadHeaderRow();
+        await withTimeout(sheet.loadHeaderRow(), 10000, 'getSheet loadHeaderRow');
     } catch (e) {
         const cells = await sheet.getCellsInRange('A1').catch(() => null);
         if (!cells || !cells[0] || !cells[0][0]) {
@@ -491,7 +488,7 @@ Tugasmu: Menganalisis pesan pengguna dan mengonversinya menjadi format JSON yang
 4. LAPORAN/REKAP:
    {"command": "rekap_bulanan", "bulan": "MM/YYYY"}
    - Wajib ada referensi bulan (misal: "rekap januari", "bulan lalu", "laporan ini").
-   - Bulan ini: 02/2026.
+   - Bulan ini: ${(() => { const d = nowGMT8(); const mm = String(d.getUTCMonth() + 1).padStart(2, '0'); return mm + '/' + d.getUTCFullYear(); })()}.
 
 5. TIDAK VALID:
    {"error": "bukan_perintah_valid"}
@@ -545,6 +542,7 @@ setInterval(() => {
 
 // ─── GLOBAL MESSAGE QUEUE ─────────────────────────────────────────────────────
 const messageQueue = [];
+const MAX_QUEUE_SIZE = 20; // prevent unbounded queue growth
 let isProcessingQueue = false;
 
 async function processQueue() {
@@ -576,12 +574,26 @@ async function processQueue() {
 
 function queuedReply(msg, content, options) {
     return new Promise((resolve, reject) => {
+        if (messageQueue.length >= MAX_QUEUE_SIZE) {
+            console.warn('[Queue] Overflow — dropping reply to prevent memory leak');
+            return resolve(null);
+        }
         messageQueue.push({ target: msg, content, options, resolve, reject });
         processQueue();
     });
 }
 
 // ─── PUPPETEER ────────────────────────────────────────────────────────────────
+const CACHE_DISABLE_ARGS = [
+    // Disable disk/media cache — keeps Chrome session folder small for fast backups
+    // Without this, Chrome writes ~12MB of cache causing 14MB zips that hang MongoDB uploads
+    '--disk-cache-size=1',
+    '--media-cache-size=1',
+    '--aggressive-cache-discard',
+    '--disable-application-cache',
+    '--disable-background-networking',
+];
+
 const puppeteerArgs = IS_PROD ? [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -597,8 +609,18 @@ const puppeteerArgs = IS_PROD ? [
     '--safebrowsing-disable-auto-update',
     '--disable-breakpad',
     '--crash-dumps-dir=/tmp/chrome-crashes',
-    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
-] : ['--no-sandbox', '--disable-setuid-sandbox'];
+    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    ...CACHE_DISABLE_ARGS,
+] : [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--no-first-run',
+    '--disable-extensions',
+    '--mute-audio',
+    ...CACHE_DISABLE_ARGS,
+];
 
 const puppeteerConfig = IS_PROD
     ? {
@@ -608,7 +630,7 @@ const puppeteerConfig = IS_PROD
         timeout: 120000,
         protocolTimeout: 120000
     }
-    : { headless: 'new', args: puppeteerArgs, timeout: 60000 };
+    : { headless: 'new', args: puppeteerArgs, timeout: 60000, protocolTimeout: 120000 };
 
 // ─── EXPRESS ──────────────────────────────────────────────────────────────────
 const app = express();
@@ -1083,14 +1105,16 @@ async function handleFinanceMessage(msg) {
             return;
         }
 
-        const parts = msg.body.split('-');
-        if (parts.length < 3) {
+        // Use indexOf to split on first 2 dashes only — spreadsheet IDs may contain dashes
+        const firstDash = msg.body.indexOf('-');
+        const secondDash = msg.body.indexOf('-', firstDash + 1);
+        if (firstDash === -1 || secondDash === -1) {
             await queuedReply(msg, 'Format salah. Gunakan: /Register-ID-SpreadsheetID').catch(e => console.error('Reply: ' + e.message));
             return;
         }
 
-        const targetId = parts[1].trim();
-        const sheetId = parts[2].trim();
+        const targetId = msg.body.slice(firstDash + 1, secondDash).trim();
+        const sheetId = msg.body.slice(secondDash + 1).trim();
 
         try {
             const UserSettings = getUserSettingsModel();
@@ -1163,16 +1187,16 @@ async function handleFinanceMessage(msg) {
             let teks = '╭────────────────────╮\n';
             teks += '   📊  *LAPORAN ' + bulanCari + '*\n';
             teks += '╰────────────────────╯\n\n';
-            teks += '� *Pemasukan*\n';
+            teks += '💹 *Pemasukan*\n';
             teks += '    └ ' + rupiahFmt(rekap.totalPemasukan) + '\n\n';
-            teks += '� *Pengeluaran*\n';
+            teks += '💸 *Pengeluaran*\n';
             teks += '    └ ' + rupiahFmt(rekap.totalPengeluaran) + '\n\n';
             teks += '📑 *Saldo Akhir*\n';
             teks += '    └ ' + (saldoRekap >= 0 ? '✅ *' : '⚠️ *') + rupiahFmt(saldoRekap) + '*\n';
             teks += '─────────────────────\n';
 
             if (rekap.listTransaksi.length) {
-                teks += '� *Detail Transaksi (' + rekap.listTransaksi.length + ')*\n';
+                teks += '📋 *Detail Transaksi (' + rekap.listTransaksi.length + ')*\n';
                 teks += '```\n';
                 rekap.listTransaksi.forEach(tx => { teks += tx + '\n'; });
                 teks += '```\n';
@@ -1205,9 +1229,9 @@ async function handleFinanceMessage(msg) {
                 '╭────────────────────╮\n' +
                 '   💰  *' + judulStr.toUpperCase() + '*\n' +
                 '╰────────────────────╯\n\n' +
-                '�  *Pemasukan*\n' +
+                '💹  *Pemasukan*\n' +
                 '    └ ' + rupiahFmt(r2.totalPemasukan) + '\n\n' +
-                '�  *Pengeluaran*\n' +
+                '💸  *Pengeluaran*\n' +
                 '    └ ' + rupiahFmt(r2.totalPengeluaran) + '\n\n' +
                 '─────────────────────\n' +
                 '💰  *SALDO BERSIH*\n' +
@@ -1616,7 +1640,25 @@ async function start() {
             else console.log('Re-backup every ' + BACKUP_INTERVAL / 1000 + 's');
         });
 
-        client.on('remote_session_saved', () => { sessionSavedAt = formatTime(new Date()); console.log('Session backed up @ ' + sessionSavedAt); });
+        client.on('remote_session_saved', () => {
+            sessionSavedAt = formatTime(new Date());
+            console.log('Session backed up @ ' + sessionSavedAt);
+            // After RemoteAuth saves, WA internally reloads the page.
+            // If a fresh 'ready' does NOT arrive within 90s, message listeners are dead — restart.
+            let readyAfterBackup = false;
+            const backupReadyHandler = () => { readyAfterBackup = true; };
+            client.once('ready', backupReadyHandler);
+            console.log('[PostBackup] Watchdog started — waiting for page reload...');
+            setTimeout(() => {
+                client.removeListener('ready', backupReadyHandler);
+                if (!readyAfterBackup) {
+                    console.warn('[PostBackup] No ready event 90s after backup — restarting to restore message listeners...');
+                    scheduleRestart(3000);
+                } else {
+                    console.log('[PostBackup] Page reload confirmed. All good.');
+                }
+            }, 90000);
+        });
 
         client.on('disconnected', reason => {
             botStatus = 'disconnected'; waClient = null; isReady = false; isStarting = false;
@@ -1699,8 +1741,9 @@ const WARN_IGNORABLE = [
     e => e && e.message && e.message.includes('Cannot use a session that has ended'),
     e => e && e.message && e.message.includes('connection from closed connection pool'),
     e => e && e.message && e.message.includes('Topology is closed'),
-    e => e && e.message && e.message.includes('Execution context was destroyed'),
     e => e && e.message && e.message.includes('Runtime.callFunctionOn'),
+    e => e && e.message && e.message.includes('Navigation failed because browser has disconnected'),
+    e => e && e.message && e.message.includes('net::ERR_ABORTED'),
 ];
 function classifyError(err) {
     if (SILENT_IGNORABLE.some(fn => fn(err))) return 'silent';
