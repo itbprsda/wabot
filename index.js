@@ -260,13 +260,16 @@ async function getSheet(spreadsheetId) {
     return { sheet, doc: userDoc };
 }
 
-async function hitungSaldo(sheet, filterTanggal) {
-    filterTanggal = filterTanggal || null;
+async function hitungSaldo(sheet, filterTanggal, userFilter) {
     const rows = await sheet.getRows();
     let totalPemasukan = 0, totalPengeluaran = 0;
     rows.forEach(row => {
-        const tgl = row.get('Tanggal'), nominalStr = row.get('Nominal'), tipe = row.get('Tipe');
+        const tgl = row.get('Tanggal'), nominalStr = row.get('Nominal'), tipe = row.get('Tipe'), user = row.get('User');
         if (!tgl || !nominalStr) return;
+
+        // Filter by user if provided
+        if (userFilter && user !== userFilter) return;
+
         const tglFull = tgl.toString();
         const tglSheet = tglFull.includes(',') ? tglFull.split(',')[0].trim() : tglFull.trim();
         const nominal = parseInt(nominalStr.toString().replace(/\D/g, ''), 10) || 0;
@@ -279,14 +282,18 @@ async function hitungSaldo(sheet, filterTanggal) {
     return { totalPemasukan, totalPengeluaran, saldo: totalPemasukan - totalPengeluaran };
 }
 
-async function generateRekapBulanan(sheet, bulanStr) {
+async function generateRekapBulanan(sheet, bulanStr, userFilter) {
     const rows = await sheet.getRows();
     let totalPemasukan = 0, totalPengeluaran = 0;
     const listTransaksi = [], txRaw = [];
     rows.forEach(row => {
         const tgl = row.get('Tanggal'), nominalStr = row.get('Nominal');
-        const tipe = row.get('Tipe'), deskripsi = row.get('Deskripsi') || '';
+        const tipe = row.get('Tipe'), deskripsi = row.get('Deskripsi') || '', user = row.get('User');
         if (!tgl || !nominalStr) return;
+
+        // Filter by user if provided
+        if (userFilter && user !== userFilter) return;
+
         const tglFull = tgl.toString();
         const tglHari = tglFull.includes(',') ? tglFull.split(',')[0].trim() : tglFull.trim();
         const jam = tglFull.includes(',') ? tglFull.split(',')[1].trim() : '';
@@ -305,7 +312,7 @@ async function generateRekapBulanan(sheet, bulanStr) {
 }
 
 // ─── GOOGLE SHEETS DESIGN ────────────────────────────────────────────────────
-async function designSheet(userDoc, bulanStr) {
+async function designSheet(userDoc, bulanStr, userFilter) {
     try {
         let dash = userDoc.sheetsByTitle['Dashboard'];
         if (!dash) {
@@ -317,10 +324,18 @@ async function designSheet(userDoc, bulanStr) {
         const rows = await dataSheet.getRows();
 
         const filtered = rows.filter(row => {
-            if (!bulanStr) return true;
-            const tgl = (row.get('Tanggal') || '').toString();
-            const day = tgl.includes(',') ? tgl.split(',')[0].trim() : tgl.trim();
-            return day.endsWith(bulanStr);
+            // Filter by month if provided
+            if (bulanStr) {
+                const tgl = (row.get('Tanggal') || '').toString();
+                const day = tgl.includes(',') ? tgl.split(',')[0].trim() : tgl.trim();
+                if (!day.endsWith(bulanStr)) return false;
+            }
+            // Filter by user if provided
+            if (userFilter) {
+                const user = (row.get('User') || '').toString();
+                if (user !== userFilter) return false;
+            }
+            return true;
         });
 
         let totalPemasukan = 0, totalPengeluaran = 0;
@@ -341,7 +356,7 @@ async function designSheet(userDoc, bulanStr) {
         const savingsPct = totalPemasukan > 0 ? (saldo / totalPemasukan * 100).toFixed(1) : '0.0';
         const inPct = total > 0 ? (totalPemasukan / total * 100).toFixed(1) : '0.0';
         const outPct = total > 0 ? (totalPengeluaran / total * 100).toFixed(1) : '0.0';
-        const label = bulanStr ? 'Bulan: ' + bulanStr : 'Semua Waktu';
+        const label = (userFilter ? userFilter.split('@')[0] + ' | ' : '') + (bulanStr ? 'Bulan: ' + bulanStr : 'Semua Waktu');
 
         const FIRST_TX = 11;
         const totalRows = FIRST_TX + txList.length + 2;
@@ -368,7 +383,6 @@ async function designSheet(userDoc, bulanStr) {
             if (opts.align !== undefined) cl.horizontalAlignment = opts.align;
             if (opts.wrap !== undefined) cl.wrapStrategy = opts.wrap ? 'WRAP' : 'CLIP';
 
-            // Fix: Initialize textFormat if it doesn't exist to avoid "unsaved" errors
             if (!cl.textFormat) cl.textFormat = {};
             if (opts.bold !== undefined) cl.textFormat.bold = opts.bold;
             if (opts.size !== undefined) cl.textFormat.fontSize = opts.size;
@@ -376,7 +390,6 @@ async function designSheet(userDoc, bulanStr) {
             if (opts.italic !== undefined) cl.textFormat.italic = opts.italic;
         }
 
-        // Clear all
         for (let r = 0; r < totalRows; r++)
             for (let col = 0; col < 5; col++) {
                 const cl = c(r, col);
@@ -385,16 +398,13 @@ async function designSheet(userDoc, bulanStr) {
                 cl.horizontalAlignment = 'LEFT'; cl.wrapStrategy = 'CLIP';
             }
 
-        // Row 0 — Title
         for (let col = 0; col < 5; col++) s(0, col, { bg: SURFACE });
         s(0, 0, { value: 'LAPORAN KEUANGAN', bold: true, size: 14, color: WHITE, bg: SURFACE });
         s(0, 2, { value: label, bold: true, size: 11, color: ACCENT, bg: SURFACE, align: 'CENTER' });
         s(0, 4, { value: new Date().toLocaleDateString('id-ID', { timeZone: 'Asia/Makassar' }), size: 9, color: MUTED, bg: SURFACE, align: 'RIGHT' });
 
-        // Row 1 — spacer
         for (let col = 0; col < 5; col++) s(1, col, { bg: BG });
 
-        // Rows 2–7 — Summary block
         const left = [
             { label: 'TOTAL PEMASUKAN', val: rupiahFmt(totalPemasukan), color: INCOME, bg: DARK_IN },
             { label: 'TOTAL PENGELUARAN', val: rupiahFmt(totalPengeluaran), color: EXPENSE, bg: DARK_EX },
@@ -420,18 +430,14 @@ async function designSheet(userDoc, bulanStr) {
             s(r + 1, 3, { value: item.val, bold: true, size: 13, color: item.color, bg: item.bg });
             s(r + 1, 4, { value: '', bg: item.bg });
         });
-        // Divider column
         for (let r = 2; r <= 7; r++) s(r, 2, { value: '', bg: BORDER });
 
-        // Row 8 — spacer
         for (let col = 0; col < 5; col++) s(8, col, { bg: BG });
 
-        // Row 9 — table header
         ['TANGGAL', 'DESKRIPSI', 'TIPE', 'NOMINAL', 'USER'].forEach((h, col) =>
             s(9, col, { value: h, bold: true, size: 9, color: MUTED, bg: SURFACE, align: col >= 3 ? 'RIGHT' : 'LEFT' })
         );
 
-        // Rows 10+ — transactions
         txList.forEach((tx, i) => {
             const r = 10 + i;
             const isIn = tx.tipe === 'PEMASUKAN';
@@ -444,7 +450,7 @@ async function designSheet(userDoc, bulanStr) {
         });
 
         await dash.saveUpdatedCells();
-        console.log('Dashboard sheet designed: ' + (bulanStr || 'all time'));
+        console.log('Dashboard sheet designed for ' + (userFilter || 'all users') + ' in ' + (bulanStr || 'all time'));
     } catch (err) {
         console.error('designSheet error (non-fatal): ' + err.message);
     }
@@ -1120,7 +1126,7 @@ async function handleFinanceMessage(msg) {
     if (data.command === 'rekap_bulanan') {
         try {
             const bulanCari = data.bulan;
-            const rekap = await generateRekapBulanan(sheet, bulanCari);
+            const rekap = await generateRekapBulanan(sheet, bulanCari, senderId);
             const saldoRekap = rekap.saldo;
             const saldoRekapIcon = saldoRekap >= 0 ? '✅' : '⚠️';
             let teks = '╭────────────────────╮\n';
@@ -1149,7 +1155,7 @@ async function handleFinanceMessage(msg) {
 
             await queuedReply(msg, teks).catch(e => console.error('Reply: ' + e.message));
             console.log('Sent monthly report');
-            designSheet(userDoc, bulanCari).catch(e => console.error('designSheet: ' + e.message));
+            designSheet(userDoc, bulanCari, senderId).catch(e => console.error('designSheet: ' + e.message));
         } catch (err) {
             console.error('Rekap error: ' + err.message);
             await queuedReply(msg, 'Gagal mengambil rekap: ' + err.message).catch(e => console.error('Reply: ' + e.message));
@@ -1161,7 +1167,7 @@ async function handleFinanceMessage(msg) {
     if (data.command === 'cek_saldo_sekarang' || data.command === 'cek_saldo_tanggal') {
         try {
             const tglCari = data.command === 'cek_saldo_tanggal' ? data.tanggal : null;
-            const r2 = await hitungSaldo(sheet, tglCari);
+            const r2 = await hitungSaldo(sheet, tglCari, senderId);
             const judulStr = tglCari ? '📅  Saldo ' + tglCari : '💼  Saldo Saat Ini';
             const saldoSign = r2.saldo >= 0 ? '✅' : '⚠️';
             await queuedReply(msg,
@@ -1190,7 +1196,7 @@ async function handleFinanceMessage(msg) {
             return;
         }
         try {
-            const rekapNow = await hitungSaldo(sheet);
+            const rekapNow = await hitungSaldo(sheet, null, senderId);
             const tipeTx = data.tipe ? data.tipe.toUpperCase() : '';
             let saldoBaru = rekapNow.saldo;
             if (tipeTx === 'PEMASUKAN' || tipeTx === 'DEBIT') saldoBaru += parsedNominal;
@@ -1227,7 +1233,7 @@ async function handleFinanceMessage(msg) {
             console.log('Transaction saved: ' + data.tipe + ' ' + rupiahFmt(parsedNominal));
 
             const nowMonth = formatDateID(now8).substring(3); // MM/YYYY
-            designSheet(userDoc, nowMonth).catch(e => console.error('designSheet: ' + e.message));
+            designSheet(userDoc, nowMonth, senderId).catch(e => console.error('designSheet: ' + e.message));
         } catch (err) {
             console.error('Transaction save error: ' + err.message);
             await queuedReply(msg, 'Gagal menyimpan transaksi: ' + err.message).catch(e => console.error('Reply: ' + e.message));
@@ -1418,10 +1424,10 @@ app.get('/dashboard', async (req, res) => {
         }
 
         const { sheet, doc: userDoc } = await getSheet(settings.spreadsheetId);
-        const rekap = await generateRekapBulanan(sheet, bulan);
+        const rekap = await generateRekapBulanan(sheet, bulan, from);
 
         // Always update headers and formatting on view
-        designSheet(userDoc, bulan).catch(e => console.error('Dashboard designSheet error: ' + e.message));
+        designSheet(userDoc, bulan, from).catch(e => console.error('Dashboard designSheet error: ' + e.message));
 
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.setHeader('Cache-Control', 'no-store');
