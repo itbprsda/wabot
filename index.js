@@ -43,11 +43,11 @@ try {
 }
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID || '12nM0fYtmEGRw5y170UDmWyaLWLu5T_tgWtjvEp6XedY';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const HF_TOKEN = process.env.HF_TOKEN;
 const MONGODB_URI = process.env.MONGODB_URI;
 const SESSION_NAME = process.env.SESSION_NAME || 'whatsapp-bot';
+const ADMINISTRATOR = (process.env.ADMINISTRATOR || '').split(',').map(id => id.trim()).filter(Boolean);
 const PORT = parseInt(process.env.PORT || '8000', 10);
 const API_KEY = process.env.API_KEY || 'changeme';
 const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
@@ -81,13 +81,9 @@ console.log('Webhook URL  : ' + (WEBHOOK_URL || 'Not set'));
 console.log('Public URL   : ' + (PUBLIC_URL || 'Not set'));
 console.log('Port         : ' + PORT);
 console.log('Allowed Chats: ' + (ALLOWED_CHATS.length > 0 ? ALLOWED_CHATS.join(', ') : 'All'));
+console.log('Admins       : ' + (ADMINISTRATOR.length > 0 ? ADMINISTRATOR.join(', ') : 'None'));
 
-// ─── GOOGLE SHEETS ────────────────────────────────────────────────────────────
-const serviceAccountAuth = new JWT({
-    email: creds.client_email, key: creds.private_key,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-});
-const doc = new GoogleSpreadsheet(SPREADSHEET_ID, serviceAccountAuth);
+// (Google Sheets are now handled dynamically per-user)
 
 // ─── AI CLIENTS ───────────────────────────────────────────────────────────────
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
@@ -154,6 +150,7 @@ function rupiahFmt(n) {
 // The collection always holds exactly ONE row.
 // On every rekap bulanan: wipe all rows, insert a fresh one.
 const DashboardAccessSchema = new mongoose.Schema({
+    from: { type: String, required: true },
     bulan: { type: String, required: true },
     key: { type: String, required: true },
     createdAt: { type: Date, required: true },
@@ -161,26 +158,38 @@ const DashboardAccessSchema = new mongoose.Schema({
     isUsed: { type: Boolean, default: false },
 });
 
+// User Settings Schema (from -> spreadsheetId)
+const UserSettingsSchema = new mongoose.Schema({
+    from: { type: String, required: true, unique: true },
+    spreadsheetId: { type: String, required: true },
+});
+
 function getDashboardAccessModel() {
     return mongoose.models.DashboardAccess ||
         mongoose.model('DashboardAccess', DashboardAccessSchema, 'dashboardaccess');
+}
+
+function getUserSettingsModel() {
+    return mongoose.models.UserSettings ||
+        mongoose.model('UserSettings', UserSettingsSchema, 'usersettings');
 }
 
 function generateDashboardKey() {
     return crypto.randomBytes(24).toString('hex');
 }
 
-// Delete all existing rows, then insert exactly one new row
-async function createDashboardKey(bulan) {
+// Delete all existing rows for this user+month, then insert exactly one new row
+async function createDashboardKey(from, bulan) {
     const DashboardAccess = getDashboardAccessModel();
     const key = generateDashboardKey();
-    await DashboardAccess.deleteMany({});
-    await DashboardAccess.create({ bulan, key, createdAt: new Date(), lastAccess: null, isUsed: false });
-    console.log('Dashboard key created for bulan: ' + bulan);
+    // Scope deletion to the specific user/month
+    await DashboardAccess.deleteMany({ from, bulan });
+    await DashboardAccess.create({ from, bulan, key, createdAt: new Date(), lastAccess: null, isUsed: false });
+    console.log(`Dashboard key created for ${from} (${bulan})`);
     return key;
 }
 
-// Returns: { valid: true, bulan } | { valid: false, reason: 'not_found'|'used'|'expired' }
+// Returns: { valid: true, bulan, from } | { valid: false, reason: 'not_found'|'used'|'expired' }
 async function validateDashboardKey(key) {
     const DashboardAccess = getDashboardAccessModel();
     // Find the single row and match by key
@@ -206,27 +215,43 @@ async function validateDashboardKey(key) {
 
     // Valid — record the access time
     await DashboardAccess.updateOne({ key }, { $set: { lastAccess: now } });
-    return { valid: true, bulan: record.bulan };
+    return { valid: true, bulan: record.bulan, from: record.from };
+}
+
+async function getUserSettings(from) {
+    const UserSettings = getUserSettingsModel();
+    let settings = await UserSettings.findOne({ from });
+
+    // Fallback/Migration: if this is a known primary user and no settings in DB, use ENV
+    if (!settings && ALLOWED_CHATS.includes(from)) {
+        const spreadsheetId = process.env.SPREADSHEET_ID;
+        if (spreadsheetId) {
+            settings = await UserSettings.create({ from, spreadsheetId });
+            console.log(`Migrated SPREADSHEET_ID to MongoDB for user: ${from}`);
+        }
+    }
+    return settings;
 }
 
 // ─── GOOGLE SHEETS DATA ───────────────────────────────────────────────────────
 const REQUIRED_HEADERS = ['Tanggal', 'Deskripsi', 'Nominal', 'Tipe', 'User', 'Saldo Akhir'];
 
-async function getSheet() {
-    await doc.loadInfo();
-    const sheet = doc.sheetsByIndex[0];
+async function getSheet(spreadsheetId) {
+    const userDoc = new GoogleSpreadsheet(spreadsheetId, serviceAccountAuth);
+    await userDoc.loadInfo();
+    const sheet = userDoc.sheetsByIndex[0];
     try {
         await sheet.loadHeaderRow();
     } catch (e) {
         const cells = await sheet.getCellsInRange('A1').catch(() => null);
         if (!cells || !cells[0] || !cells[0][0]) {
             await sheet.setHeaderRow(REQUIRED_HEADERS);
-            console.log('Created spreadsheet headers');
+            console.log('Created spreadsheet headers for: ' + spreadsheetId);
         } else {
             throw new Error('Failed to load headers: ' + e.message);
         }
     }
-    return sheet;
+    return { sheet, doc: userDoc };
 }
 
 async function hitungSaldo(sheet, filterTanggal) {
@@ -274,15 +299,14 @@ async function generateRekapBulanan(sheet, bulanStr) {
 }
 
 // ─── GOOGLE SHEETS DESIGN ────────────────────────────────────────────────────
-async function designSheet(bulanStr) {
+async function designSheet(userDoc, bulanStr) {
     try {
-        await doc.loadInfo();
-        let dash = doc.sheetsByTitle['Dashboard'];
+        let dash = userDoc.sheetsByTitle['Dashboard'];
         if (!dash) {
-            dash = await doc.addSheet({ title: 'Dashboard', index: 1 });
+            dash = await userDoc.addSheet({ title: 'Dashboard', index: 1 });
             console.log('Created Dashboard sheet');
         }
-        const dataSheet = doc.sheetsByIndex[0];
+        const dataSheet = userDoc.sheetsByIndex[0];
         await dataSheet.loadHeaderRow();
         const rows = await dataSheet.getRows();
 
@@ -735,7 +759,7 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 </html>`;
 }
 
-function renderDashboard(rekap, bulan, txRows) {
+function renderDashboard(rekap, bulan, txRows, spreadsheetId) {
     const saldo = rekap.saldo;
     const total = rekap.totalPemasukan + rekap.totalPengeluaran;
     const inPct = total > 0 ? (rekap.totalPemasukan / total * 100).toFixed(1) : '0.0';
@@ -983,7 +1007,7 @@ body::before{
 
   <div class="hdr">
     <div class="hdr-left">
-      <div class="hdr-eyebrow">Laporan Keuangan</div>
+      <div class="hdr-eyebrow">Laporan Keuangan &middot; ${spreadsheetId?.substring(0, 8)}...</div>
       <h1 class="hdr-title">Ringkasan <em>Bulanan</em></h1>
     </div>
     <div class="hdr-right">
@@ -1235,6 +1259,37 @@ async function handleFinanceMessage(msg) {
         return;
     }
 
+    if (msg.body === '/CekId') {
+        await queuedReply(msg, `ID WhatsApp Anda adalah:\n*${senderId}*`).catch(e => console.error('Reply: ' + e.message));
+        return;
+    }
+
+    if (msg.body.startsWith('/Register-')) {
+        const isAdmin = ADMINISTRATOR.includes(senderId);
+        if (!isAdmin) {
+            await queuedReply(msg, 'Maaf, hanya administrator yang bisa melakukan registrasi.').catch(e => console.error('Reply: ' + e.message));
+            return;
+        }
+
+        const parts = msg.body.split('-');
+        if (parts.length < 3) {
+            await queuedReply(msg, 'Format salah. Gunakan: /Register-ID-SpreadsheetID').catch(e => console.error('Reply: ' + e.message));
+            return;
+        }
+
+        const targetId = parts[1].trim();
+        const sheetId = parts[2].trim();
+
+        try {
+            const UserSettings = getUserSettingsModel();
+            await UserSettings.updateOne({ from: targetId }, { $set: { spreadsheetId: sheetId } }, { upsert: true });
+            await queuedReply(msg, `✅ Berhasil meregistrasi user!\nID: ${targetId}\nSheet: ${sheetId}`).catch(e => console.error('Reply: ' + e.message));
+        } catch (err) {
+            await queuedReply(msg, `❌ Gagal registrasi: ${err.message}`).catch(e => console.error('Reply: ' + e.message));
+        }
+        return;
+    }
+
     console.log('[AI] Processing: ' + msg.body.slice(0, 80));
 
     // Pre-check: does the message contain ANY numeric content?
@@ -1268,8 +1323,19 @@ async function handleFinanceMessage(msg) {
     // TRANSAKSI TANPA NOMINAL — abaikan diam-diam
     if (data.missing_nominal === true) { console.log('Missing nominal — ignored'); return; }
 
-    let sheet;
-    try { sheet = await getSheet(); }
+    const settings = await getUserSettings(senderId);
+    if (!settings) {
+        await queuedReply(msg, 'Buku kas belum diatur untuk nomormu. Hubungi admin untuk mendaftarkan Spreadsheet ID.').catch(e => console.error('Reply: ' + e.message));
+        return;
+    }
+    const { spreadsheetId } = settings;
+
+    let sheet, userDoc;
+    try {
+        const res = await getSheet(spreadsheetId);
+        sheet = res.sheet;
+        userDoc = res.doc;
+    }
     catch (err) {
         await queuedReply(msg, 'Tidak bisa akses spreadsheet: ' + err.message).catch(e => console.error('Reply: ' + e.message));
         return;
@@ -1301,12 +1367,12 @@ async function handleFinanceMessage(msg) {
             } else {
                 teks += '_Belum ada transaksi bulan ini_\n';
             }
-            teks += '\n📋  *Spreadsheet:*\nhttps://docs.google.com/spreadsheets/d/' + SPREADSHEET_ID;
+            teks += '\n📋  *Spreadsheet:*\nhttps://docs.google.com/spreadsheets/d/' + spreadsheetId;
 
             // Generate dashboard key and include in URL
             if (PUBLIC_URL) {
                 try {
-                    const dashKey = await createDashboardKey(bulanCari);
+                    const dashKey = await createDashboardKey(senderId, bulanCari);
                     teks += '\n\n*Dashboard Visual:*\n' + PUBLIC_URL + '/dashboard?key=' + dashKey;
                     teks += '\n_(Link aktif 5 menit)_';
                 } catch (keyErr) {
@@ -1317,7 +1383,7 @@ async function handleFinanceMessage(msg) {
 
             await queuedReply(msg, teks).catch(e => console.error('Reply: ' + e.message));
             console.log('Sent monthly report');
-            designSheet(bulanCari).catch(e => console.error('designSheet: ' + e.message));
+            designSheet(userDoc, bulanCari).catch(e => console.error('designSheet: ' + e.message));
         } catch (err) {
             console.error('Rekap error: ' + err.message);
             await queuedReply(msg, 'Gagal mengambil rekap: ' + err.message).catch(e => console.error('Reply: ' + e.message));
@@ -1393,7 +1459,7 @@ async function handleFinanceMessage(msg) {
             console.log('Transaction saved: ' + data.tipe + ' ' + rupiahFmt(parsedNominal));
 
             const nowMonth = formatDateID(now8).substring(3); // MM/YYYY
-            designSheet(nowMonth).catch(e => console.error('designSheet: ' + e.message));
+            designSheet(userDoc, nowMonth).catch(e => console.error('designSheet: ' + e.message));
         } catch (err) {
             console.error('Transaction save error: ' + err.message);
             await queuedReply(msg, 'Gagal menyimpan transaksi: ' + err.message).catch(e => console.error('Reply: ' + e.message));
@@ -1576,11 +1642,22 @@ app.get('/dashboard', async (req, res) => {
 
     // Key is valid — render the dashboard
     try {
-        const sheet = await getSheet();
-        const rekap = await generateRekapBulanan(sheet, validation.bulan);
+        const { from, bulan } = validation;
+        const settings = await getUserSettings(from);
+
+        if (!settings) {
+            return res.status(500).send('<p style="font-family:monospace;padding:20px;color:#ff6b6b">Settings not configured for this user.</p>');
+        }
+
+        const { sheet, doc: userDoc } = await getSheet(settings.spreadsheetId);
+        const rekap = await generateRekapBulanan(sheet, bulan);
+
+        // Always update headers and formatting on view
+        designSheet(userDoc, bulan).catch(e => console.error('Dashboard designSheet error: ' + e.message));
+
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.setHeader('Cache-Control', 'no-store');
-        res.send(renderDashboard(rekap, validation.bulan, rekap.txRaw));
+        res.send(renderDashboard(rekap, bulan, rekap.txRaw, settings.spreadsheetId));
     } catch (err) {
         console.error('Dashboard render error: ' + err.message);
         res.status(500).send('<p style="font-family:monospace;padding:20px;color:#ff6b6b">Error: ' + err.message + '</p>');
