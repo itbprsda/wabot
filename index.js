@@ -999,6 +999,7 @@ function createFixedStore(mongooseInstance) {
             const sn = path.basename(options.session);
             const zipPath = path.join(DATA_PATH, sn + '.zip');
             if (!fs.existsSync(zipPath)) { console.warn('Zip not found (skip): ' + zipPath); return; }
+            if (!isReady) { console.log('Skipping MongoDB backup (bot not ready yet)'); return; }
             const size = fs.statSync(zipPath).size;
             if (size < 1000) throw new Error('Zip too small (' + size + ' bytes)');
             console.log('Uploading: ' + sn + '.zip (' + (size / 1024).toFixed(1) + ' KB)');
