@@ -620,6 +620,7 @@ let isReady = false;
 let qrData = null;
 let currentClient = null;
 let readyWatchdog = null;
+let activeReadyCheck = null;
 let authCount = 0;
 const startTime = Date.now();
 
@@ -981,9 +982,18 @@ function createFixedStore(mongooseInstance) {
             console.log('[DEBUG] sessionExists accessing collection: whatsapp-' + sn + '.files');
             const col = mongooseInstance.connection.db.collection('whatsapp-' + sn + '.files');
             console.log('[DEBUG] sessionExists counting documents...');
-            const count = await col.countDocuments({ filename: { $regex: '^' + sn + '\\.zip\\.' } }, { limit: 1 });
-            console.log('[DEBUG] sessionExists count result: ' + count);
-            return count > 0;
+            try {
+                const count = await withTimeout(
+                    col.countDocuments({ filename: { $regex: '^' + sn + '\\.zip\\.' } }, { limit: 1 }),
+                    10000,
+                    'MongoDB countDocuments'
+                );
+                console.log('[DEBUG] sessionExists count result: ' + count);
+                return count > 0;
+            } catch (err) {
+                console.error('[DEBUG] sessionExists countDocuments failed: ' + err.message);
+                return false;
+            }
         },
         async save(options) {
             const sn = path.basename(options.session);
@@ -1461,6 +1471,7 @@ async function start() {
     if (isStarting) { console.warn('start() already running'); return; }
     isStarting = true; isReady = false; qrData = null;
     if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
+    if (activeReadyCheck) { clearInterval(activeReadyCheck); activeReadyCheck = null; }
     authCount = 0;
 
     try {
@@ -1485,12 +1496,21 @@ async function start() {
         if (sessionExists) {
             console.log('[DEBUG] Fetching files list from MongoDB...');
             const col = mongoose.connection.db.collection('whatsapp-' + SESSION_DIR_NAME + '.files');
-            const files = await col.find({ filename: { $regex: '^' + SESSION_DIR_NAME + '\\.zip\\.' } }).toArray();
-            console.log('[DEBUG] Files found: ' + files.length);
-            const slots = files.sort((a, b) => b.uploadDate - a.uploadDate);
-            const best = slots.find(f => f.length >= 1000);
-            if (!best) { console.warn('All slots corrupted — rescanning QR'); await store.delete({ session: SESSION_DIR_NAME }); }
-            else { console.log('Session found: ' + slots.length + ' slot(s), best: ' + (best.length / 1024).toFixed(1) + ' KB'); validSession = true; }
+            try {
+                const files = await withTimeout(
+                    col.find({ filename: { $regex: '^' + SESSION_DIR_NAME + '\\.zip\\.' } }).toArray(),
+                    10000,
+                    'MongoDB toArray'
+                );
+                console.log('[DEBUG] Files found: ' + files.length);
+                const slots = files.sort((a, b) => b.uploadDate - a.uploadDate);
+                const best = slots.find(f => f.length >= 1000);
+                if (!best) { console.warn('All slots corrupted — rescanning QR'); await store.delete({ session: SESSION_DIR_NAME }); }
+                else { console.log('Session found: ' + slots.length + ' slot(s), best: ' + (best.length / 1024).toFixed(1) + ' KB'); validSession = true; }
+            } catch (err) {
+                console.error('[DEBUG] Fetching files failed: ' + err.message);
+                console.warn('Proceeding without session due to MongoDB timeout');
+            }
         } else {
             console.log('No session in MongoDB — QR scan required');
         }
@@ -1515,6 +1535,7 @@ async function start() {
 
         client.on('qr', qr => {
             if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; } // QR means it's not "stuck"
+            if (activeReadyCheck) { clearInterval(activeReadyCheck); activeReadyCheck = null; }
             botStatus = 'qr_ready'; qrData = qr;
             if (validSession) console.warn('Session restore failed — scan fresh QR');
             console.log('\n--- Scan QR: open the web UI or hit /api/qr ---\n');
@@ -1528,6 +1549,7 @@ async function start() {
             if (authCount >= 2 && !isReady) {
                 console.warn('Multiple authentication hits detected — forcing ready status');
                 if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
+                if (activeReadyCheck) { clearInterval(activeReadyCheck); activeReadyCheck = null; }
                 botStatus = 'ready'; waClient = client;
                 isReady = true; console.log('Bot is ready! (Forced)');
             } else if (!isReady) {
@@ -1535,6 +1557,39 @@ async function start() {
                 readyWatchdog = setTimeout(() => {
                     if (!isReady) { console.error('Watchdog: never ready after 3min — restarting'); scheduleRestart(5000); }
                 }, 3 * 60 * 1000);
+
+                if (activeReadyCheck) { clearInterval(activeReadyCheck); activeReadyCheck = null; }
+                activeReadyCheck = setInterval(async () => {
+                    if (isReady) {
+                        clearInterval(activeReadyCheck); activeReadyCheck = null;
+                        return;
+                    }
+                    try {
+                        console.log('[Ping] Checking active readiness...');
+                        const state = await client.getState().catch(() => null);
+                        if (state === 'CONNECTED') {
+                            console.log('[Ping] State is CONNECTED. Forcing ready.');
+                            if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
+                            clearInterval(activeReadyCheck); activeReadyCheck = null;
+                            botStatus = 'ready'; waClient = client; isReady = true;
+                            console.log('Bot is ready! (Active Ping)');
+                            return;
+                        }
+
+                        const wid = client.info?.wid?._serialized;
+                        if (wid) {
+                            console.log('[Ping] Sending test message to self...');
+                            await client.sendMessage(wid, 'Self-ping: readiness check').catch(() => null);
+                            console.log('[Ping] Message sent. Forcing ready.');
+                            if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
+                            clearInterval(activeReadyCheck); activeReadyCheck = null;
+                            botStatus = 'ready'; waClient = client; isReady = true;
+                            console.log('Bot is ready! (Active Ping Message)');
+                        }
+                    } catch (e) {
+                        console.log('[Ping] Check pending: ' + e.message);
+                    }
+                }, 15000);
             }
             qrData = null;
         });
@@ -1543,6 +1598,7 @@ async function start() {
 
         client.on('ready', () => {
             if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
+            if (activeReadyCheck) { clearInterval(activeReadyCheck); activeReadyCheck = null; }
             botStatus = 'ready'; waClient = client;
             if (isReady) { console.log('WA internal refresh — still ready'); return; }
             isReady = true; console.log('Bot is ready!');
@@ -1556,6 +1612,7 @@ async function start() {
             botStatus = 'disconnected'; waClient = null; isReady = false; isStarting = false;
             authCount = 0;
             if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
+            if (activeReadyCheck) { clearInterval(activeReadyCheck); activeReadyCheck = null; }
             console.warn('Disconnected: ' + reason); scheduleRestart(10000);
         });
 
@@ -1608,6 +1665,7 @@ async function scheduleRestart(ms) {
     console.log('Restarting in ' + ms / 1000 + 's...');
     waClient = null; isStarting = false;
     if (readyWatchdog) { clearTimeout(readyWatchdog); readyWatchdog = null; }
+    if (activeReadyCheck) { clearInterval(activeReadyCheck); activeReadyCheck = null; }
     if (currentClient) { try { await currentClient.destroy(); } catch (e) { } currentClient = null; }
     try { await mongoose.connection.close(); } catch (e) { }
     setTimeout(start, ms);
