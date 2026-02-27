@@ -451,59 +451,44 @@ async function designSheet(userDoc, bulanStr) {
 }
 
 // ─── AI PARSING ───────────────────────────────────────────────────────────────
-const AI_SYSTEM_PROMPT = `Kamu adalah asisten keuangan pribadi yang cerdas, ramah, dan fleksibel.
-Tugasmu: baca pesan user dan klasifikasikan ke format JSON murni.
+const AI_SYSTEM_PROMPT = `Kamu adalah asisten keuangan pribadi yang cerdas, ramah, dan profesional.
+Tugasmu: Menganalisis pesan pengguna dan mengonversinya menjadi format JSON yang sangat akurat.
 
-=== ATURAN NOMINAL — WAJIB DIIKUTI ===
-HANYA ekstrak nominal jika ada angka/kata bilangan EKSPLISIT dalam pesan.
-DILARANG KERAS mengarang, mengasumsikan, atau menebak nominal jika tidak ada angka.
-Kata bilangan yang valid: angka (1, 500, 1000), jt/juta, rb/ribu/k, sejuta, setengah juta, dll.
-Jika TIDAK ADA angka/kata bilangan sama sekali → WAJIB gunakan missing_nominal.
+=== DAFTAR KATA KUNCI INDONESIA ===
+- PEMASUKAN: gajian, bonus, hadiah, untung, laba, trima, dapet, masuk, setor, msk, msuk, transfer masuk.
+- PENGELUARAN: bayar, beli, jajan, kluar, klr, biayai, tagihan, angsuran, cicilan, sedekah, infaq, zakat, donasi, tarik, transfer keluar, bensin, parkir, belanja.
 
-=== KONVERSI NOMINAL (hanya jika ada angka eksplisit) ===
-- jt/juta = x1.000.000  → "2jt"=2000000, "1.5juta"=1500000, "sejuta"=1000000
-- rb/ribu/k = x1.000    → "500rb"=500000, "50k"=50000
-- angka polos < 10000 dalam konteks uang → ribuan → "500"=500000, "25"=25000
-- angka polos >= 10000 → nilai asli → "75000"=75000
-- "setengah juta"=500000, "seperempat juta"=250000
+=== ATURAN EKSTRAKSI NOMINAL ===
+1. HANYA ambil angka yang disebutkan eksplisit.
+2. Konversi satuan:
+   - "jt" / "juta" = x1.000.000 (contoh: "1.5jt" -> 1500000)
+   - "rb" / "ribu" / "k" = x1.000 (contoh: "50k" -> 50000)
+   - Angka 1-999 tanpa satuan biasanya ribuan (contoh: "jajan 25" -> 25000).
+   - Angka >= 1000 tanpa satuan adalah nilai asli.
+3. Jika tidak ada angka sama sekali di pesan → gunakan "missing_nominal": true.
 
-=== NORMALISASI TEKS ===
-- msuk/msk/masuk/dapet/nerima/trima/masuk = PEMASUKAN
-- kluar/klr/bayar/byr/beli/bli/kirim = PENGELUARAN
-- bni/bca/bri/mandiri/dana/ovo/gopay = nama bank (masukkan ke deskripsi)
-- blm/belum, d/di, yg/yang, catet/catat = kata penghubung (abaikan)
+=== FORMAT OUTPUT JSON ===
 
-=== KLASIFIKASI ===
+1. TRANSAKSI (Ada Nominal):
+   {"nominal": 1000000, "tipe": "PEMASUKAN"/"PENGELUARAN", "deskripsi": "Singkat & Jelas"}
 
-1. TRANSAKSI ADA NOMINAL — ada angka/bilangan eksplisit dalam pesan:
-   -> {"nominal": angka, "tipe": "PEMASUKAN"/"PENGELUARAN", "deskripsi": "..."}
-   Contoh: "transfer masuk bni 1jt"    -> {"nominal":1000000,"tipe":"PEMASUKAN","deskripsi":"Transfer masuk BNI"}
-   Contoh: "byr listrik 150rb"         -> {"nominal":150000,"tipe":"PENGELUARAN","deskripsi":"Bayar listrik"}
-   Contoh: "jajan 25"                  -> {"nominal":25000,"tipe":"PENGELUARAN","deskripsi":"Jajan"}
+2. TRANSAKSI (Tanpa Nominal):
+   {"missing_nominal": true, "tipe": "PEMASUKAN"/"PENGELUARAN", "deskripsi": "..."}
 
-2. TRANSAKSI TANPA NOMINAL — ada maksud transaksi tapi TIDAK ADA angka/bilangan sama sekali:
-   -> {"missing_nominal": true, "tipe": "PEMASUKAN"/"PENGELUARAN", "deskripsi": "..."}
-   Contoh: "blm d catet yg msuk d bni itu"  -> {"missing_nominal":true,"tipe":"PEMASUKAN","deskripsi":"Transfer masuk BNI"}
-   Contoh: "catat pengeluaran bensin tadi"   -> {"missing_nominal":true,"tipe":"PENGELUARAN","deskripsi":"Bensin"}
-   Contoh: "ada transfer masuk"              -> {"missing_nominal":true,"tipe":"PEMASUKAN","deskripsi":"Transfer masuk"}
+3. CEK SALDO:
+   {"command": "cek_saldo_sekarang"}
+   Atau {"command": "cek_saldo_tanggal", "tanggal": "DD/MM/YYYY"} (jika menyebutkan tanggal spesifik)
 
-3. CEK SALDO SEKARANG:
-   -> {"command":"cek_saldo_sekarang"}
+4. LAPORAN/REKAP:
+   {"command": "rekap_bulanan", "bulan": "MM/YYYY"}
+   - Wajib ada referensi bulan (misal: "rekap januari", "bulan lalu", "laporan ini").
+   - Bulan ini: 02/2026.
 
-4. CEK SALDO TANGGAL:
-   -> {"command":"cek_saldo_tanggal","tanggal":"DD/MM/YYYY"}
+5. TIDAK VALID:
+   {"error": "bukan_perintah_valid"}
+   - Untuk sapaan santai ("halo", "test"), atau pesan tanpa maksud keuangan yang jelas.
 
-5. REKAP BULANAN — WAJIB ada sebutan bulan/periode eksplisit (nama bulan, angka bulan, "bulan ini", "bulan lalu"):
-   -> {"command":"rekap_bulanan","bulan":"MM/YYYY"}
-   (Bulan saat ini: 02/2026)
-   Contoh valid  : "rekap februari", "laporan bulan ini", "rekap 01/2026", "summary bulan lalu"
-   Contoh TIDAK valid: "nnti rekap ulang", "rekap dong", "bisa rekap?" → {"error":"bukan_perintah_valid"}
-
-6. LAINNYA — sapaan, percakapan biasa, perintah tidak lengkap, tidak ada data keuangan:
-   -> {"error":"bukan_perintah_valid"}
-   Contoh: "nnti rekap ulang", "oke", "makasih", "nanti aja", "coba lagi" → {"error":"bukan_perintah_valid"}
-
-PENTING: output HANYA JSON murni, tanpa teks lain atau markdown.`;
+PENTING: Hanya balas dengan JSON murni. Jangan ada penjelasan tambahan.`;
 
 async function parseWithHuggingFace(message, retries) {
     retries = retries === undefined ? 2 : retries;
@@ -776,369 +761,153 @@ function renderDashboard(rekap, bulan, txRows, spreadsheetId) {
     const incArc = total > 0 ? +(rekap.totalPemasukan / total * C).toFixed(2) : 0;
 
     const iconMap = {
-        // Pemasukan
-        gaji: '💼', salary: '💼', upah: '💼',
-        bonus: '🎁', thr: '🎁', hadiah: '🎁',
-        transfer: '💸', kirim: '💸',
-        freelance: '💻', proyek: '💻', project: '💻',
-        investasi: '📈', dividen: '📈', bunga: '📈',
-        arisan: '🤝', iuran: '🤝',
-        tambahan: '➕', lain: '➕',
-        // Pengeluaran — makanan
-        makan: '🍜', minum: '🧋', kopi: '☕', cafe: '☕', resto: '🍽️',
-        jajan: '🍡', snack: '🍡', bakso: '🍜', nasi: '🍚',
-        // Transportasi
-        bensin: '⛽', bbm: '⛽', parkir: '🅿️',
-        grab: '🚗', gojek: '🚗', ojek: '🚗', taxi: '🚕', bus: '🚌',
-        // Tagihan
-        listrik: '💡', air: '💧', pdam: '💧', internet: '🌐', wifi: '🌐',
-        pulsa: '📱', paket: '📱', telp: '📱',
-        // Belanja
-        beli: '🛒', belanja: '🛒', shopee: '🛒', tokopedia: '🛒', lazada: '🛒',
-        indomaret: '🏪', alfamart: '🏪', minimarket: '🏪',
-        // Cicilan / tagihan besar
-        angsuran: '🏠', kpr: '🏠', sewa: '🏠', kontrakan: '🏠', kos: '🏠', rent: '🏠',
-        kartu: '💳', kredit: '💳',
-        // Kesehatan
-        dokter: '🏥', obat: '💊', apotek: '💊', rs: '🏥', 'rumah sakit': '🏥',
-        // Pendidikan
-        sekolah: '🎓', kuliah: '🎓', kursus: '🎓', les: '🎓',
-        // Hiburan
-        game: '🎮', netflix: '🎬', spotify: '🎵', bioskop: '🎬',
-        // Bank/dompet digital
-        bni: '🏦', bca: '🏦', bri: '🏦', mandiri: '🏦', bank: '🏦',
-        dana: '👛', ovo: '👛', gopay: '👛', shopeepay: '👛', dompet: '👛',
+        gaji: '💼', bonus: '🎁', hadiah: '🎁', transfer: '💸', proyek: '💻', jajan: '🍢', bensin: '⛽', makan: '🍽️', minum: '☕'
     };
     function getIcon(desc) {
         const d = (desc || '').toLowerCase();
-        // Match longer keys first to avoid partial matches
-        const sorted = Object.entries(iconMap).sort((a, b) => b[0].length - a[0].length);
-        for (const [k, v] of sorted) if (d.includes(k)) return v;
-        return '📋';
+        for (const [k, v] of Object.entries(iconMap)) if (d.includes(k)) return v;
+        return '📑';
     }
 
-    const sorted = [...txRows].sort((a, b) => b.tgl.localeCompare(a.tgl) || b.jam.localeCompare(a.jam));
-
-    const txHtml = sorted.map(tx => {
+    const txHtml = [...txRows].sort((a, b) => b.tgl.localeCompare(a.tgl)).map(tx => {
         const isIn = tx.tipe === 'PEMASUKAN';
-        return `<div class="tx">
-          <div class="tx-ic ${isIn ? 'ic-in' : 'ic-out'}">${getIcon(tx.desc)}</div>
-          <div class="tx-body">
-            <div class="tx-desc">${tx.desc}</div>
-            <div class="tx-time">${tx.tgl} &middot; ${(tx.jam || '').replace(/\./g, ':')}</div>
-          </div>
-          <div class="tx-amt ${isIn ? 'amt-in' : 'amt-out'}">${isIn ? '+' : '-'}${rupiahFmt(tx.nominal)}</div>
+        return `<div class="tx-item">
+            <div class="tx-icon ${isIn ? 'in' : 'out'}">${getIcon(tx.desc)}</div>
+            <div class="tx-info">
+                <div class="tx-desc">${tx.desc || 'Tanpa Deskripsi'}</div>
+                <div class="tx-meta">${tx.tgl}</div>
+            </div>
+            <div class="tx-amount ${isIn ? 'in' : 'out'}">${isIn ? '+' : '-'}${rupiahFmt(tx.nominal)}</div>
         </div>`;
     }).join('');
 
-    // Use GMT+8 for display time
     const nowStr = formatLocaleGMT8(new Date());
 
     return `<!DOCTYPE html>
 <html lang="id">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Laporan ${bulan}</title>
-<link href="https://fonts.googleapis.com/css2?family=Clash+Display:wght@400;500;600;700&family=Cabinet+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
-<style>
-:root {
-  --bg:       #05070d;
-  --s1:       #0b0f1a;
-  --s2:       #111827;
-  --border:   #1e2535;
-  --text:     #f0f4ff;
-  --muted:    #4a5578;
-  --sub:      #8b96b0;
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Finance Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=Geist+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #03050a; --glass: rgba(15, 20, 35, 0.7); --border: rgba(255, 255, 255, 0.08);
+            --text: #f0f2f5; --muted: #8a919e; --accent: #6366f1; --in: #10b981; --out: #ef4444;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { background: var(--bg); color: var(--text); font-family: 'Plus Jakarta Sans', sans-serif; min-height: 100vh; overflow-x: hidden; }
+        
+        /* Background Glows */
+        .glow { position: fixed; width: 600px; height: 600px; border-radius: 50%; filter: blur(120px); opacity: 0.15; z-index: -1; pointer-events: none; }
+        .glow-1 { top: -200px; left: -200px; background: var(--accent); }
+        .glow-2 { bottom: -200px; right: -200px; background: var(--in); }
 
-  --teal:     #00d9b1;
-  --teal-dim: rgba(0,217,177,.12);
-  --coral:    #ff6b6b;
-  --coral-dim:rgba(255,107,107,.12);
-  --sky:      #38bdf8;
-  --sky-dim:  rgba(56,189,248,.12);
-  --amber:    #fbbf24;
-  --amber-dim:rgba(251,191,36,.12);
-  --violet:   #a78bfa;
-  --violet-dim:rgba(167,139,250,.12);
-  --lime:     #a3e635;
-}
-*{margin:0;padding:0;box-sizing:border-box}
-html{scroll-behavior:smooth}
-body{background:var(--bg);color:var(--text);font-family:'Plus Jakarta Sans',sans-serif;min-height:100vh;overflow-x:hidden}
+        .container { max-width: 800px; margin: 0 auto; padding: 40px 20px 100px; }
+        
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; animation: slideDown 0.6s ease-out; }
+        .h-left h1 { font-size: 28px; font-weight: 800; letter-spacing: -1px; }
+        .h-left p { color: var(--muted); font-family: 'Geist Mono'; font-size: 12px; margin-top: 4px; }
+        .h-right { text-align: right; }
+        .tag { background: rgba(99, 102, 241, 0.1); color: var(--accent); padding: 4px 12px; border-radius: 100px; font-size: 11px; font-weight: 700; }
 
-body::before{
-  content:'';position:fixed;inset:0;
-  background:
-    radial-gradient(ellipse 60% 40% at 20% 10%,  rgba(0,217,177,.06)  0%, transparent 60%),
-    radial-gradient(ellipse 50% 50% at 85% 15%,  rgba(56,189,248,.05) 0%, transparent 55%),
-    radial-gradient(ellipse 70% 40% at 50% 90%,  rgba(167,139,250,.06)0%, transparent 60%),
-    radial-gradient(ellipse 40% 60% at 0%   60%,  rgba(255,107,107,.04)0%, transparent 50%);
-  pointer-events:none;z-index:0
-}
+        .hero-card { 
+            background: var(--glass); border: 1px solid var(--border); backdrop-filter: blur(20px); 
+            border-radius: 32px; padding: 48px; text-align: center; margin-bottom: 24px;
+            box-shadow: 0 40px 100px -20px rgba(0,0,0,0.5); animation: zoomIn 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .hero-card p { font-family: 'Geist Mono'; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 2px; }
+        .hero-card .balance { font-size: 56px; font-weight: 800; margin: 12px 0; letter-spacing: -2px; }
+        .hero-card .balance.in { color: var(--in); }
+        .hero-card .balance.out { color: var(--out); }
 
-.page{position:relative;z-index:1;max-width:1000px;margin:0 auto;padding:48px 24px 96px}
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 40px; }
+        .stat-card { 
+            background: var(--glass); border: 1px solid var(--border); border-radius: 24px; padding: 24px;
+            animation: slideUp 0.6s ease-out both;
+        }
+        .stat-card:nth-child(1) { animation-delay: 0.1s; }
+        .stat-card:nth-child(2) { animation-delay: 0.2s; }
+        .stat-label { font-size: 13px; color: var(--muted); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+        .stat-label i { width: 8px; height: 8px; border-radius: 50%; }
+        .stat-label .i-in { background: var(--in); }
+        .stat-label .i-out { background: var(--out); }
+        .stat-value { font-size: 20px; font-weight: 700; }
 
-.hdr{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:52px;gap:16px;flex-wrap:wrap}
-.hdr-left{}
-.hdr-eyebrow{font-family:'JetBrains Mono',monospace;font-size:.65rem;letter-spacing:.18em;text-transform:uppercase;color:var(--teal);margin-bottom:10px;display:flex;align-items:center;gap:8px}
-.hdr-eyebrow::before{content:'';width:24px;height:1px;background:var(--teal)}
-.hdr-title{font-family:'Plus Jakarta Sans',sans-serif;font-size:clamp(2rem,5vw,3.2rem);font-weight:800;letter-spacing:-.04em;line-height:1;color:var(--text)}
-.hdr-title em{font-style:normal;background:linear-gradient(135deg,var(--teal),var(--sky));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.hdr-right{text-align:right}
-.hdr-bulan{font-family:'JetBrains Mono',monospace;font-size:1.1rem;font-weight:500;color:var(--text)}
-.hdr-ts{font-size:.68rem;color:var(--muted);margin-top:4px}
+        .section-title { font-size: 18px; font-weight: 700; margin-bottom: 20px; display: flex; align-items: center; gap: 12px; }
+        .section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 
-.hero{
-  position:relative;overflow:hidden;border-radius:24px;padding:40px 44px;margin-bottom:28px;
-  background:linear-gradient(135deg,#0b1628 0%,#0d1e35 50%,#0c172c 100%);
-  border:1px solid rgba(56,189,248,.15);
-  animation:fadeUp .5s ease both
-}
-.hero::before{
-  content:'';position:absolute;top:-80px;right:-80px;width:320px;height:320px;
-  background:radial-gradient(circle,rgba(56,189,248,.1) 0%,transparent 65%);pointer-events:none
-}
-.hero::after{
-  content:'';position:absolute;bottom:-60px;left:-60px;width:240px;height:240px;
-  background:radial-gradient(circle,rgba(0,217,177,.07) 0%,transparent 65%);pointer-events:none
-}
-.hero-label{font-family:'JetBrains Mono',monospace;font-size:.65rem;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:12px}
-.hero-amount{font-size:clamp(2.4rem,7vw,4.2rem);font-weight:800;letter-spacing:-.05em;line-height:1;margin-bottom:8px}
-.hero-amount.pos{background:linear-gradient(120deg,var(--teal),var(--sky));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.hero-amount.neg{color:var(--coral)}
-.hero-sub{font-size:.75rem;color:var(--sub);margin-bottom:32px}
-.hero-pills{display:flex;gap:10px;flex-wrap:wrap}
-.pill{display:flex;align-items:center;gap:7px;padding:8px 16px;border-radius:100px;font-size:.72rem;font-weight:500;border:1px solid}
-.pill-in {background:var(--teal-dim);border-color:rgba(0,217,177,.25);color:var(--teal)}
-.pill-out{background:var(--coral-dim);border-color:rgba(255,107,107,.25);color:var(--coral)}
-.pill-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+        .tx-list { background: var(--glass); border: 1px solid var(--border); border-radius: 28px; overflow: hidden; animation: slideUp 0.6s ease-out 0.3s both; }
+        .tx-item { display: flex; align-items: center; padding: 18px 24px; border-bottom: 1px solid var(--border); transition: 0.2s; }
+        .tx-item:last-child { border-bottom: none; }
+        .tx-item:hover { background: rgba(255,255,255,0.02); }
+        .tx-icon { width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+        .tx-icon.in { background: rgba(16, 185, 129, 0.1); }
+        .tx-icon.out { background: rgba(239, 68, 68, 0.1); }
+        .tx-info { flex: 1; margin-left: 16px; }
+        .tx-desc { font-size: 15px; font-weight: 600; }
+        .tx-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+        .tx-amount { font-weight: 700; font-size: 15px; }
+        .tx-amount.in { color: var(--in); }
+        .tx-amount.out { color: var(--out); }
 
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:28px}
-@media(max-width:560px){.grid2{grid-template-columns:1fr}}
+        footer { text-align: center; margin-top: 60px; font-family: 'Geist Mono'; font-size: 11px; color: var(--muted); }
+        footer a { color: var(--accent); text-decoration: none; margin-left: 10px; border-bottom: 1px solid transparent; transition: 0.2s; }
+        footer a:hover { border-bottom-color: var(--accent); }
 
-.stat{
-  border-radius:20px;padding:28px;border:1px solid var(--border);
-  position:relative;overflow:hidden;
-  transition:transform .25s,box-shadow .25s;animation:fadeUp .5s ease both
-}
-.stat:hover{transform:translateY(-3px);box-shadow:0 20px 60px rgba(0,0,0,.5)}
-.stat-in {background:linear-gradient(135deg,#091a17,#0e2620)}
-.stat-out{background:linear-gradient(135deg,#1a0b0f,#200e13)}
-.stat-glow{position:absolute;top:-40px;right:-40px;width:160px;height:160px;border-radius:50%;pointer-events:none;opacity:.4}
-.stat-glow-in {background:radial-gradient(circle,var(--teal-dim) 0%,transparent 70%)}
-.stat-glow-out{background:radial-gradient(circle,var(--coral-dim) 0%,transparent 70%)}
-.stat-icon-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
-.stat-badge{font-family:'JetBrains Mono',monospace;font-size:.6rem;letter-spacing:.12em;text-transform:uppercase;padding:4px 10px;border-radius:6px;font-weight:500}
-.stat-badge-in {background:var(--teal-dim);color:var(--teal)}
-.stat-badge-out{background:var(--coral-dim);color:var(--coral)}
-.stat-arrow{font-size:1.4rem}
-.stat-label{font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:8px}
-.stat-val{font-size:clamp(1.3rem,3.5vw,1.9rem);font-weight:800;letter-spacing:-.03em;line-height:1;margin-bottom:6px}
-.stat-val-in {color:var(--teal)}
-.stat-val-out{color:var(--coral)}
-.stat-count{font-family:'JetBrains Mono',monospace;font-size:.65rem;color:var(--muted)}
-.stat-bar{height:4px;border-radius:4px;background:rgba(255,255,255,.05);margin-top:20px;overflow:hidden}
-.stat-fill{height:100%;border-radius:4px;transition:width 1.4s cubic-bezier(.16,1,.3,1)}
-.stat-fill-in {background:linear-gradient(90deg,var(--teal),var(--sky))}
-.stat-fill-out{background:linear-gradient(90deg,var(--coral),var(--amber))}
+        @keyframes slideDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes zoomIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
 
-.chart-card{
-  border-radius:24px;padding:36px;border:1px solid var(--border);
-  background:var(--s1);margin-bottom:28px;animation:fadeUp .6s ease both
-}
-.section-eyebrow{font-family:'JetBrains Mono',monospace;font-size:.62rem;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:24px;display:flex;align-items:center;gap:8px}
-.section-eyebrow::before{content:'';width:16px;height:1px;background:var(--muted)}
-.chart-inner{display:flex;align-items:center;justify-content:center;gap:52px;flex-wrap:wrap}
-
-.donut-wrap{position:relative;width:210px;height:210px;flex-shrink:0}
-.donut-svg{width:100%;height:100%;transform:rotate(-90deg)}
-.donut-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
-.donut-pct{font-size:2.2rem;font-weight:800;letter-spacing:-.04em;line-height:1;background:linear-gradient(135deg,var(--teal),var(--sky));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.donut-sub{font-family:'JetBrains Mono',monospace;font-size:.58rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-top:4px}
-
-.legend{display:flex;flex-direction:column;gap:24px;min-width:220px}
-.leg-item{}
-.leg-top{display:flex;align-items:center;gap:10px;margin-bottom:6px}
-.leg-dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
-.leg-dot-in   {background:var(--teal);  box-shadow:0 0 10px rgba(0,217,177,.4)}
-.leg-dot-out  {background:var(--coral); box-shadow:0 0 10px rgba(255,107,107,.4)}
-.leg-dot-saldo{background:var(--violet);box-shadow:0 0 10px rgba(167,139,250,.4)}
-.leg-name{font-family:'JetBrains Mono',monospace;font-size:.65rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
-.leg-val{font-size:1.3rem;font-weight:800;letter-spacing:-.03em;padding-left:20px}
-.leg-val-in   {color:var(--teal)}
-.leg-val-out  {color:var(--coral)}
-.leg-val-saldo{color:var(--violet)}
-.leg-pct{font-family:'JetBrains Mono',monospace;font-size:.62rem;color:var(--muted);padding-left:20px;margin-top:2px}
-
-.tx-card{
-  border-radius:24px;border:1px solid var(--border);
-  background:var(--s1);overflow:hidden;animation:fadeUp .7s ease both
-}
-.tx-hdr{display:flex;justify-content:space-between;align-items:center;padding:28px 32px 22px;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:10px}
-.tx-hdr-label{font-family:'JetBrains Mono',monospace;font-size:.65rem;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);display:flex;align-items:center;gap:8px}
-.tx-hdr-label::before{content:'';width:12px;height:1px;background:var(--muted)}
-.tx-badge{background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:100px;padding:4px 12px;font-family:'JetBrains Mono',monospace;font-size:.62rem;color:var(--muted)}
-.tx-list{padding:8px 0}
-.tx{display:flex;align-items:center;gap:16px;padding:14px 32px;border-bottom:1px solid rgba(255,255,255,.03);transition:background .15s}
-.tx:last-child{border-bottom:none}
-.tx:hover{background:rgba(255,255,255,.02)}
-.tx-ic{width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:.95rem;flex-shrink:0}
-.ic-in {background:var(--teal-dim)}
-.ic-out{background:var(--coral-dim)}
-.tx-body{flex:1;min-width:0}
-.tx-desc{font-size:.82rem;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-transform:capitalize;margin-bottom:3px}
-.tx-time{font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--muted)}
-.tx-amt{font-weight:800;font-size:.9rem;white-space:nowrap;text-align:right;letter-spacing:-.01em}
-.amt-in {color:var(--teal)}
-.amt-out{color:var(--coral)}
-.amt-in::before{content:'+'}
-.amt-out::before{content:'-'}
-
-.footer{margin-top:56px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:.6rem;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;line-height:2.2}
-.footer a{color:var(--sky);text-decoration:none}
-
-@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-.hero{animation-delay:.04s}
-.stat:nth-child(1){animation-delay:.1s}
-.stat:nth-child(2){animation-delay:.16s}
-.chart-card{animation-delay:.22s}
-.tx-card{animation-delay:.28s}
-.donut-ring{transition:stroke-dasharray 1.6s cubic-bezier(.16,1,.3,1),stroke-dashoffset 1.6s cubic-bezier(.16,1,.3,1)}
-</style>
+        @media (max-width: 600px) {
+            .hero-card { padding: 32px 24px; }
+            .hero-card .balance { font-size: 36px; }
+            .stats-grid { grid-template-columns: 1fr; }
+        }
+    </style>
 </head>
 <body>
-<div class="page">
+    <div class="glow glow-1"></div>
+    <div class="glow glow-2"></div>
 
-  <div class="hdr">
-    <div class="hdr-left">
-      <div class="hdr-eyebrow">Laporan Keuangan &middot; ${spreadsheetId?.substring(0, 8)}...</div>
-      <h1 class="hdr-title">Ringkasan <em>Bulanan</em></h1>
-    </div>
-    <div class="hdr-right">
-      <div class="hdr-bulan">${bulan}</div>
-      <div class="hdr-ts">Diperbarui: ${nowStr} WIB</div>
-    </div>
-  </div>
+    <div class="container">
+        <header>
+            <div class="h-left">
+                <h1>Finance <em>Vault</em></h1>
+                <p>Periode: ${bulan}</p>
+            </div>
+            <div class="h-right">
+                <span class="tag">REAL-TIME DATA</span>
+            </div>
+        </header>
 
-  <div class="hero">
-    <div class="hero-label">Saldo Bersih</div>
-    <div class="hero-amount ${saldo >= 0 ? 'pos' : 'neg'}">${rupiahFmt(saldo)}</div>
-    <div class="hero-sub">Total semua transaksi bulan ${bulan}</div>
-    <div class="hero-pills">
-      <div class="pill pill-in"><span class="pill-dot"></span>Pemasukan: ${rupiahFmt(rekap.totalPemasukan)}</div>
-      <div class="pill pill-out"><span class="pill-dot"></span>Pengeluaran: ${rupiahFmt(rekap.totalPengeluaran)}</div>
-    </div>
-  </div>
+        <section class="hero-card">
+            <p>Saldo Bersih Tersedia</p>
+            <div class="balance ${saldo >= 0 ? 'in' : 'out'}">${rupiahFmt(saldo)}</div>
+            <div class="tag" style="background:rgba(255,255,255,0.05); color:var(--muted)">Updated ${nowStr}</div>
+        </section>
 
-  <div class="grid2">
-    <div class="stat stat-in">
-      <div class="stat-glow stat-glow-in"></div>
-      <div class="stat-icon-row">
-        <span class="stat-badge stat-badge-in">Masuk</span>
-        <span class="stat-arrow" style="color:var(--teal)">↑</span>
-      </div>
-      <div class="stat-label">Total Pemasukan</div>
-      <div class="stat-val stat-val-in">${rupiahFmt(rekap.totalPemasukan)}</div>
-      <div class="stat-count">${txRows.filter(t => t.tipe === 'PEMASUKAN').length} transaksi &middot; ${inPct}% dari arus total</div>
-      <div class="stat-bar"><div class="stat-fill stat-fill-in" id="bar-in" style="width:0"></div></div>
-    </div>
-    <div class="stat stat-out">
-      <div class="stat-glow stat-glow-out"></div>
-      <div class="stat-icon-row">
-        <span class="stat-badge stat-badge-out">Keluar</span>
-        <span class="stat-arrow" style="color:var(--coral)">↓</span>
-      </div>
-      <div class="stat-label">Total Pengeluaran</div>
-      <div class="stat-val stat-val-out">${rupiahFmt(rekap.totalPengeluaran)}</div>
-      <div class="stat-count">${txRows.filter(t => t.tipe === 'PENGELUARAN').length} transaksi &middot; ${outPct}% dari arus total</div>
-      <div class="stat-bar"><div class="stat-fill stat-fill-out" id="bar-out" style="width:0"></div></div>
-    </div>
-  </div>
-
-  <div class="chart-card">
-    <div class="section-eyebrow">Distribusi Keuangan</div>
-    <div class="chart-inner">
-      <div class="donut-wrap">
-        <svg class="donut-svg" viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="38" fill="none" stroke="#1e2535" stroke-width="13"/>
-          <circle id="arc-out" cx="50" cy="50" r="38" fill="none" stroke="url(#gOut)" stroke-width="13"
-            stroke-dasharray="0 238.76" stroke-linecap="round" class="donut-ring"
-            style="filter:drop-shadow(0 0 5px rgba(255,107,107,.5))"/>
-          <circle id="arc-in" cx="50" cy="50" r="38" fill="none" stroke="url(#gIn)" stroke-width="13"
-            stroke-dasharray="0 238.76" stroke-linecap="round" class="donut-ring"
-            style="filter:drop-shadow(0 0 5px rgba(0,217,177,.5))"/>
-          <defs>
-            <linearGradient id="gIn"  x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stop-color="#00d9b1"/>
-              <stop offset="100%" stop-color="#38bdf8"/>
-            </linearGradient>
-            <linearGradient id="gOut" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stop-color="#ff6b6b"/>
-              <stop offset="100%" stop-color="#fbbf24"/>
-            </linearGradient>
-          </defs>
-        </svg>
-        <div class="donut-center">
-          <div class="donut-pct">${savingsPct}%</div>
-          <div class="donut-sub">Tabungan</div>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label"><i class="i-in"></i> Pemasukan</div>
+                <div class="stat-value" style="color:var(--in)">${rupiahFmt(rekap.totalPemasukan)}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label"><i class="i-out"></i> Pengeluaran</div>
+                <div class="stat-value" style="color:var(--out)">${rupiahFmt(rekap.totalPengeluaran)}</div>
+            </div>
         </div>
-      </div>
-      <div class="legend">
-        <div class="leg-item">
-          <div class="leg-top"><span class="leg-dot leg-dot-in"></span><span class="leg-name">Pemasukan</span></div>
-          <div class="leg-val leg-val-in">${rupiahFmt(rekap.totalPemasukan)}</div>
-          <div class="leg-pct">${inPct}% dari total arus</div>
+
+        <h2 class="section-title">Riwayat Arus Kas</h2>
+        <div class="tx-list">
+            ${txHtml || '<div style="padding:40px; text-align:center; color:var(--muted)">Belum ada data untuk periode ini</div>'}
         </div>
-        <div class="leg-item">
-          <div class="leg-top"><span class="leg-dot leg-dot-out"></span><span class="leg-name">Pengeluaran</span></div>
-          <div class="leg-val leg-val-out">${rupiahFmt(rekap.totalPengeluaran)}</div>
-          <div class="leg-pct">${outPct}% dari total arus</div>
-        </div>
-        <div class="leg-item">
-          <div class="leg-top"><span class="leg-dot leg-dot-saldo"></span><span class="leg-name">Saldo Bersih</span></div>
-          <div class="leg-val leg-val-saldo">${rupiahFmt(saldo)}</div>
-          <div class="leg-pct">${savingsPct}% dari pemasukan tersisa</div>
-        </div>
-      </div>
+
+        <footer>
+            <span>&copy; 2026 Wabot Finance</span>
+            <a href="https://docs.google.com/spreadsheets/d/${spreadsheetId}" target="_blank">Google Sheets</a>
+        </footer>
     </div>
-  </div>
-
-  <div class="tx-card">
-    <div class="tx-hdr">
-      <div class="tx-hdr-label">Riwayat Transaksi</div>
-      <div class="tx-badge">${txRows.length} transaksi</div>
-    </div>
-    <div class="tx-list">${txHtml}</div>
-  </div>
-
-  <div class="footer">
-    wabot finance &middot; ${bulan} &middot; data langsung dari spreadsheet<br>
-    <a href="https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}" target="_blank">Buka Google Sheets</a>
-  </div>
-</div>
-
-<script>
-const C=${C}, expArc=${expArc}, incArc=${incArc}, total=${total};
-const inPct=${parseFloat(inPct)}, outPct=${parseFloat(outPct)};
-const bigger=Math.max(${rekap.totalPemasukan},${rekap.totalPengeluaran});
-
-setTimeout(()=>{
-  if(total > 0){
-    const ao=document.getElementById('arc-out');
-    ao.setAttribute('stroke-dasharray', expArc+' '+(C-expArc));
-    ao.setAttribute('stroke-dashoffset','0');
-    const ai=document.getElementById('arc-in');
-    ai.setAttribute('stroke-dasharray', incArc+' '+(C-incArc));
-    ai.setAttribute('stroke-dashoffset', -expArc);
-  }
-  if(bigger > 0){
-    document.getElementById('bar-in').style.width  =(${rekap.totalPemasukan}  /bigger*100)+'%';
-    document.getElementById('bar-out').style.width =(${rekap.totalPengeluaran}/bigger*100)+'%';
-  }
-},350);
-</script>
 </body>
 </html>`;
 }
@@ -1354,38 +1123,29 @@ async function handleFinanceMessage(msg) {
             const rekap = await generateRekapBulanan(sheet, bulanCari);
             const saldoRekap = rekap.saldo;
             const saldoRekapIcon = saldoRekap >= 0 ? '✅' : '⚠️';
-            let teks = '╔════════════════════╗\n';
-            teks += '  📊  *REKAP ' + bulanCari + '*\n';
-            teks += '╚════════════════════╝\n\n';
-            teks += '📈  Pemasukan\n';
-            teks += '    *' + rupiahFmt(rekap.totalPemasukan) + '*\n\n';
-            teks += '📉  Pengeluaran\n';
-            teks += '    *' + rupiahFmt(rekap.totalPengeluaran) + '*\n\n';
+            let teks = '╭────────────────────╮\n';
+            teks += '   📊  *LAPORAN ' + bulanCari + '*\n';
+            teks += '╰────────────────────╯\n\n';
+            teks += '� *Pemasukan*\n';
+            teks += '    └ ' + rupiahFmt(rekap.totalPemasukan) + '\n\n';
+            teks += '� *Pengeluaran*\n';
+            teks += '    └ ' + rupiahFmt(rekap.totalPengeluaran) + '\n\n';
+            teks += '📑 *Saldo Akhir*\n';
+            teks += '    └ ' + (saldoRekap >= 0 ? '✅ *' : '⚠️ *') + rupiahFmt(saldoRekap) + '*\n';
             teks += '─────────────────────\n';
-            teks += saldoRekapIcon + '  Saldo Bersih\n';
-            teks += '    *' + rupiahFmt(saldoRekap) + '*\n\n';
+
             if (rekap.listTransaksi.length) {
-                teks += '─────────────────────\n';
-                teks += '🗒️  *Transaksi (' + rekap.listTransaksi.length + ')*\n';
+                teks += '� *Detail Transaksi (' + rekap.listTransaksi.length + ')*\n';
                 teks += '```\n';
                 rekap.listTransaksi.forEach(tx => { teks += tx + '\n'; });
                 teks += '```\n';
             } else {
-                teks += '_Belum ada transaksi bulan ini_\n';
+                teks += '_Belum ada transaksi di periode ini._\n';
             }
-            teks += '\n📋  *Spreadsheet:*\nhttps://docs.google.com/spreadsheets/d/' + spreadsheetId;
 
-            // Generate dashboard key and include in URL
-            if (PUBLIC_URL) {
-                try {
-                    const dashKey = await createDashboardKey(senderId, bulanCari);
-                    teks += '\n\n*Dashboard Visual:*\n' + PUBLIC_URL + '/dashboard?key=' + dashKey;
-                    teks += '\n_(Link aktif 5 menit)_';
-                } catch (keyErr) {
-                    console.error('Failed to create dashboard key: ' + keyErr.message);
-                    // Fallback: no dashboard link if key creation fails
-                }
-            }
+            teks += '─────────────────────\n';
+            teks += '🌐 *Web Dashboard:*\n' + PUBLIC_URL + '/dashboard?key=' + (await createDashboardKey(senderId, bulanCari));
+            teks += '\n_(Link aktif 5 menit)_';
 
             await queuedReply(msg, teks).catch(e => console.error('Reply: ' + e.message));
             console.log('Sent monthly report');
@@ -1405,16 +1165,16 @@ async function handleFinanceMessage(msg) {
             const judulStr = tglCari ? '📅  Saldo ' + tglCari : '💼  Saldo Saat Ini';
             const saldoSign = r2.saldo >= 0 ? '✅' : '⚠️';
             await queuedReply(msg,
-                '╔════════════════════╗\n' +
-                '  ' + judulStr + '\n' +
-                '╚════════════════════╝\n\n' +
-                '📈  Pemasukan\n' +
-                '    *' + rupiahFmt(r2.totalPemasukan) + '*\n\n' +
-                '📉  Pengeluaran\n' +
-                '    *' + rupiahFmt(r2.totalPengeluaran) + '*\n\n' +
+                '╭────────────────────╮\n' +
+                '   💰  *' + judulStr.toUpperCase() + '*\n' +
+                '╰────────────────────╯\n\n' +
+                '�  *Pemasukan*\n' +
+                '    └ ' + rupiahFmt(r2.totalPemasukan) + '\n\n' +
+                '�  *Pengeluaran*\n' +
+                '    └ ' + rupiahFmt(r2.totalPengeluaran) + '\n\n' +
                 '─────────────────────\n' +
-                saldoSign + '  Saldo Bersih\n' +
-                '    *' + rupiahFmt(r2.saldo) + '*'
+                '💰  *SALDO BERSIH*\n' +
+                '    └ ' + saldoSign + ' *' + rupiahFmt(r2.saldo) + '*'
             ).catch(e => console.error('Reply: ' + e.message));
         } catch (err) {
             await queuedReply(msg, 'Gagal mengambil saldo: ' + err.message).catch(e => console.error('Reply: ' + e.message));
@@ -1448,19 +1208,21 @@ async function handleFinanceMessage(msg) {
             });
 
             const isIn = (tipeTx === 'PEMASUKAN' || tipeTx === 'DEBIT');
-            const arrow = isIn ? '📈' : '📉';
-            const tipeLabel = isIn ? '🟢 Pemasukan' : '🔴 Pengeluaran';
+            const arrow = isIn ? '➕' : '➖';
+            const tipeLabel = isIn ? 'PEMASUKAN' : 'PENGELUARAN';
             const saldoIcon = saldoBaru >= 0 ? '✅' : '⚠️';
+
             await queuedReply(msg,
-                '╔════════════════════╗\n' +
-                '  ' + arrow + '  *TERCATAT*\n' +
-                '╚════════════════════╝\n\n' +
-                '📝  ' + (data.deskripsi || '-') + '\n' +
-                '💵  *' + rupiahFmt(parsedNominal) + '*\n' +
-                '🏷️  ' + tipeLabel + '\n\n' +
+                '╭────────────────────╮\n' +
+                '   ' + arrow + '  *NOTA TRANSAKSI*\n' +
+                '╰────────────────────╯\n\n' +
+                '📝  *Item:* ' + (data.deskripsi || '-') + '\n' +
+                '💵  *Nominal:* ' + rupiahFmt(parsedNominal) + '\n' +
+                '🏷️  *Kategori:* ' + tipeLabel + '\n' +
+                '📅  *Waktu:* ' + formatTimeLocal(now8) + '\n\n' +
                 '─────────────────────\n' +
-                saldoIcon + '  Saldo sekarang\n' +
-                '    *' + rupiahFmt(saldoBaru) + '*'
+                '💰  *Saldo Saat Ini:*\n' +
+                '    ' + saldoIcon + ' *' + rupiahFmt(saldoBaru) + '*'
             ).catch(e => console.error('Reply: ' + e.message));
             console.log('Transaction saved: ' + data.tipe + ' ' + rupiahFmt(parsedNominal));
 
